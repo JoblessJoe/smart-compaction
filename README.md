@@ -89,16 +89,26 @@ None. The tool takes no arguments and needs no setup beyond installing it.
 
 ## Status
 
-Verified end-to-end against a real dsh session: the tool loads, the model calls it, it selects a
-valid boundary-safe range, and it drives `compactRegion()` mid-turn without ever hitting the
-`busy` failure this design exists to avoid.
+Verified end-to-end against a real dsh session, including:
+
+- Basic call: the tool loads, the model calls it, it selects a valid boundary-safe range, and it
+  drives `compactRegion()` mid-turn without ever hitting the `busy` failure this design exists to
+  avoid.
+- A real tool-call/tool-result pair (`todo_write`, marked `in_progress` then `completed`) sitting
+  in the compacted range — stays correctly paired, nothing split.
+- Three `compact_now` calls in a row in one session (one accidental, caught by dsh's own
+  duplicate-call guard mid-task) — each completed cleanly, no crash, no `busy`, no corrupted state
+  from operating on a surface that already contains an earlier compaction's checkpoint message.
 
 **Troubleshooting:** if the tool returns an error like `summarization produced no text summary
-content`, that's not this plugin — it means the underlying model spent its entire output budget on
-hidden reasoning and returned no visible text for the summary. This is a known failure mode on
-local models whose "thinking" level isn't an enforced token budget (e.g. Ollama's `think: low`).
-If your adapter supports capping reasoning length, enable it; otherwise it's a model/adapter issue
-independent of `compact_now`.
+content`, that's not this plugin — `compact_now` selected a valid range and handed it to dsh's own
+summarizer, which returned nothing. Observed specifically when the compacted range contains only
+injected boilerplate (e.g. standing instructions) with no real assistant-generated text yet —
+succeeded reliably once genuine conversation content was in the range. If it happens on ranges with
+real content too, check whether your model's "thinking" level is an actually-enforced token budget
+or just an instruction (e.g. Ollama's `think: low` is unenforced — a model can still spend its
+entire output budget on hidden reasoning and return no visible summary text). Either way, this is a
+model/summarizer-side issue, not something `compact_now` itself controls.
 
 ## License
 
