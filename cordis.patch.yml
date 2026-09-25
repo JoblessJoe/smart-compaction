@@ -1,0 +1,5 @@
+# This bundle's own default layer: mounts the plugin under id
+# `tool-compact-now`. Nothing to configure — the tool takes no config.
+- insert:
+    - id: tool-compact-now
+      name: 'smart-compaction'

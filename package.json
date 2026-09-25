@@ -1,0 +1,36 @@
+{
+  "name": "smart-compaction",
+  "version": "0.1.0",
+  "description": "dsh plugin: a compact_now tool letting the model trigger compaction itself at a safe point, instead of only the automatic token-threshold trigger.",
+  "type": "module",
+  "main": "./index.js",
+  "engines": {
+    "node": ">=22"
+  },
+  "license": "MIT",
+  "author": "joblessjoe",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/JoblessJoe/smart-compaction"
+  },
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "compaction",
+    "context-management"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "*",
+    "@deepseek-ai/dsh-compaction": "*",
+    "@deepseek-ai/dsh-tools": "*"
+  },
+  "devDependencies": {
+    "@deepseek-ai/dsh-compaction": "0.0.1-rc.5",
+    "@deepseek-ai/dsh-tools": "0.0.1-rc.1"
+  }
+}
