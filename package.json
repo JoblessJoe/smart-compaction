@@ -11,7 +11,7 @@
   "author": "joblessjoe",
   "repository": {
     "type": "git",
-    "url": "https://github.com/JoblessJoe/smart-compaction"
+    "url": "git+https://github.com/JoblessJoe/smart-compaction.git"
   },
   "keywords": [
     "dsh",
@@ -22,8 +22,39 @@
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "compatibility": {
+      "dsh": ">=0.1.5-rc.3"
     }
   },
+  "dshhub": {
+    "schemaVersion": 1,
+    "displayName": "Smart Compaction",
+    "summary": "Gives the model a compact_now tool so it can trigger compaction itself at a safe point, instead of only being interrupted by the automatic token-threshold trigger.",
+    "categories": [
+      "Sessions & Messages",
+      "Tools & Capabilities"
+    ],
+    "surfaces": [
+      "cli",
+      "web"
+    ],
+    "capabilities": {
+      "provides": [
+        "tool:compact_now"
+      ]
+    },
+    "compatibility": {
+      "dsh": ">=0.1.5-rc.3",
+      "node": ">=22"
+    },
+    "permissions": {}
+  },
+  "files": [
+    "index.js",
+    "select-range.js",
+    "cordis.patch.yml"
+  ],
   "peerDependencies": {
     "@deepseek-ai/cordis": "*",
     "@deepseek-ai/dsh-compaction": "*",
