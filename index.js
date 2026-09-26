@@ -17,7 +17,13 @@ import { defineTool } from '@deepseek-ai/dsh-tools'
 import { selectCompactableRange } from './select-range.js'
 
 export const name = 'tool-compact-now'
-export const inject = ['tools', 'compaction']
+// `compaction` deliberately NOT in `inject`: that would make this plugin's
+// boot depend on the service existing, and not every profile bundle ships a
+// compaction backend (e.g. dsh-web-app doesn't) — a hard inject broke boot
+// on any profile that lacks one. Looked up via `ctx.get()` at call time
+// instead, same as core's own optional-sibling-service pattern
+// (compaction-basic's own `toolResultPruner` lookup).
+export const inject = ['tools']
 
 const DESCRIPTION =
   'Voluntarily compact older conversation history now, at a point you know is safe: '
@@ -53,6 +59,10 @@ export function apply(ctx) {
       }],
     },
     async execute(_args, exec) {
+      const compaction = ctx.get('compaction')
+      if (!compaction) {
+        throw new Error('compact_now: no compaction service is configured on this profile')
+      }
       if (!exec.agent) {
         throw new Error('compact_now requires an owning agent session')
       }
@@ -63,7 +73,7 @@ export function apply(ctx) {
       }
       let result
       try {
-        result = await ctx.compaction.compactRegion(range.start, range.end, exec.agent, exec.signal)
+        result = await compaction.compactRegion(range.start, range.end, exec.agent, exec.signal)
       } catch (error) {
         // The four errors compactRegion's own range validation can throw all
         // indicate this file's range-selection logic disagrees with core's —
