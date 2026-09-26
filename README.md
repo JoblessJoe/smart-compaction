@@ -56,6 +56,12 @@ array yourself.)
 No build step, no config. Restart your dsh service after adding it — new bundles are only picked
 up on boot.
 
+**Requires a `compaction` service on your profile.** Most profile templates ship one, but not all
+do (e.g. `@deepseek-ai/dsh-web-app`-based profiles don't by default). If yours doesn't, `compact_now`
+still installs cleanly (it won't break your profile's boot) but returns an error every time it's
+called: `"no compaction service is configured on this profile"`. Add a `compaction-basic` bundle to
+get one.
+
 ### Tell the model when to use it
 
 `compact_now` only *offers* the capability — nothing calls it unless instructed to. Add something
