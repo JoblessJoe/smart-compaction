@@ -1,5 +1,6 @@
 # This bundle's own default layer: mounts the plugin under id
-# `tool-compact-now`. Nothing to configure — the tool takes no config.
+# `tool-compact-now`. One module registers both the `compact_now` and
+# `context_status` tools — nothing to configure, the tool takes no config.
 - insert:
     - id: tool-compact-now
       name: 'smart-compaction'

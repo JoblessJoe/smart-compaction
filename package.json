@@ -1,7 +1,7 @@
 {
   "name": "smart-compaction",
-  "version": "0.1.0",
-  "description": "dsh plugin: a compact_now tool letting the model trigger compaction itself at a safe point, instead of only the automatic token-threshold trigger.",
+  "version": "0.2.0",
+  "description": "dsh plugin: a compact_now tool letting the model trigger compaction itself at a safe point, plus a context_status tool so it can check real token usage against its context window, instead of only the automatic token-threshold trigger.",
   "type": "module",
   "main": "./index.js",
   "engines": {
@@ -30,7 +30,7 @@
   "dshhub": {
     "schemaVersion": 1,
     "displayName": "Smart Compaction",
-    "summary": "Gives the model a compact_now tool so it can trigger compaction itself at a safe point, instead of only being interrupted by the automatic token-threshold trigger.",
+    "summary": "Gives the model a compact_now tool so it can trigger compaction itself at a safe point, plus a context_status tool to check real token usage against its context window, instead of only being interrupted by the automatic token-threshold trigger.",
     "categories": [
       "Sessions & Messages",
       "Tools & Capabilities"
@@ -41,7 +41,8 @@
     ],
     "capabilities": {
       "provides": [
-        "tool:compact_now"
+        "tool:compact_now",
+        "tool:context_status"
       ]
     },
     "compatibility": {
@@ -53,6 +54,7 @@
   "files": [
     "index.js",
     "select-range.js",
+    "context-status.js",
     "cordis.patch.yml"
   ],
   "peerDependencies": {

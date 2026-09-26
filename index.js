@@ -1,7 +1,10 @@
 /**
  * dsh plugin: registers a `compact_now` tool on `ctx.tools` so the model can
  * voluntarily trigger compaction at a point it judges safe, instead of only
- * ever being interrupted by dsh's automatic token-threshold trigger.
+ * ever being interrupted by dsh's automatic token-threshold trigger. Also
+ * registers `context_status`, so the model can check real, current token
+ * usage against its actual context window on demand instead of guessing
+ * whether "the conversation feels long" — see context-status.js.
  *
  * Calls `ctx.compaction.compactRegion()` directly — NOT `compactNow()` (what
  * the human `/compact` command uses). `compactRegion` doesn't require an
@@ -14,6 +17,7 @@
 
 import { toolPairingBalancedBefore } from '@deepseek-ai/dsh-compaction'
 import { defineTool } from '@deepseek-ai/dsh-tools'
+import { summarizeContextUsage } from './context-status.js'
 import { selectCompactableRange } from './select-range.js'
 
 export const name = 'tool-compact-now'
@@ -87,4 +91,55 @@ export function apply(ctx) {
       }
     },
   }))
+
+  ctx.tools.register(defineTool({
+    name: 'context_status',
+    description: CONTEXT_STATUS_DESCRIPTION,
+    parameters: {},
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          available: { type: 'boolean', required: true },
+          contextWindow: { type: 'integer' },
+          usedTokens: { type: 'integer' },
+          percentUsed: { type: 'number' },
+          estimated: { type: 'boolean' },
+        },
+      },
+      render: (_args, value) => [{ type: 'text', text: renderContextStatus(value) }],
+    },
+    async execute(_args, exec) {
+      if (!exec.agent) {
+        throw new Error('context_status requires an owning agent session')
+      }
+      const projections = ctx.get('sessionProjections')
+      if (!projections) return { available: false }
+      const state = projections.stateOf(exec.agent.session, 'contextPressure')
+      return summarizeContextUsage(state)
+    },
+  }))
+}
+
+const CONTEXT_STATUS_DESCRIPTION =
+  'Check real, current context-window usage for this session: tokens used so far and the '
+  + 'model\'s actual context-window size, whatever model this session happens to be running. '
+  + 'Use this instead of guessing whether the conversation "feels long" before deciding to call '
+  + 'compact_now — automatic compaction generally triggers well before the window fills, '
+  + 'typically somewhere around 70-90% depending on profile config, so usage climbing past that '
+  + 'range is a good signal to call compact_now proactively rather than wait to be interrupted. '
+  + 'Harmless to call anytime; read-only, never modifies the session.'
+
+function renderContextStatus(value) {
+  if (!value.available) {
+    return 'Context usage isn\'t available on this profile (no token-meter service mounted).'
+  }
+  if (value.contextWindow === undefined) {
+    return `~${value.usedTokens} tokens used so far this session; context-window size isn't `
+      + 'known yet (no model request has completed yet).'
+  }
+  const note = value.estimated ? ' (estimated — no confirmed usage sample yet)' : ''
+  return `~${value.usedTokens.toLocaleString()} / ${value.contextWindow.toLocaleString()} tokens `
+    + `used (${value.percentUsed}%)${note}.`
 }

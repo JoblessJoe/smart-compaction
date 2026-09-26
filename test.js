@@ -5,6 +5,7 @@
 //   node test.js
 
 import assert from 'node:assert/strict'
+import { summarizeContextUsage } from './context-status.js'
 import { selectCompactableRange } from './select-range.js'
 
 /**
@@ -87,6 +88,49 @@ async function main() {
       { type: 'user/message' },
     ])
     assert.equal(selectCompactableRange(session, alwaysBalanced), null)
+  }
+
+  console.log('8) context_status: no projection state (service not mounted) -> unavailable...')
+  assert.deepEqual(summarizeContextUsage(undefined), { available: false })
+
+  console.log('9) context_status: no request logged yet -> surfaceTokens only, no window...')
+  {
+    const result = summarizeContextUsage({ surfaceTokens: 120 })
+    assert.deepEqual(result, { available: true, usedTokens: 120, estimated: true })
+  }
+
+  console.log('10) context_status: window known, no usage sample yet -> surfaceTokens, estimated...')
+  {
+    const result = summarizeContextUsage({ contextWindow: 10_000, surfaceTokens: 500 })
+    assert.deepEqual(result, {
+      available: true, contextWindow: 10_000, usedTokens: 500, percentUsed: 5, estimated: true,
+    })
+  }
+
+  console.log('11) context_status: real usage sample -> pressure + surface delta, not estimated...')
+  {
+    // 1000 prompt tokens sampled when surface was 800; surface has since grown to 950
+    // (e.g. new tool output) -> projected usage = 1000 + (950 - 800) = 1150.
+    const result = summarizeContextUsage({
+      contextWindow: 10_000,
+      pressureTokens: 1_000,
+      sampledSurfaceTokens: 800,
+      surfaceTokens: 950,
+    })
+    assert.deepEqual(result, {
+      available: true, contextWindow: 10_000, usedTokens: 1_150, percentUsed: 11.5, estimated: false,
+    })
+  }
+
+  console.log('12) context_status: surface shrank below the sample (e.g. compaction) -> clamped to 0...')
+  {
+    const result = summarizeContextUsage({
+      contextWindow: 10_000,
+      pressureTokens: 200,
+      sampledSurfaceTokens: 5_000,
+      surfaceTokens: 100,
+    })
+    assert.equal(result.usedTokens, 0)
   }
 
   console.log('\nall passed.')
