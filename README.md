@@ -87,8 +87,18 @@ installs cleanly and just reports `available: false` instead of erroring.
 
 ### Tell the model when to use it
 
-Neither tool calls itself — nothing uses them unless instructed to. Add something like this to
-your `AGENTS.md` (or whatever your profile injects as standing instructions):
+This is baked into both tools' own descriptions, so it works out of the box with no setup: each
+tool's description tells the model to check `context_status` right after finishing a
+self-contained step (e.g. right after `todo_write` marks an item `completed`) and to follow up
+with `compact_now` once usage climbs past roughly 70-90%. Since both descriptions are sent to the
+model on every request automatically, no `AGENTS.md` edit is required for this behavior — unlike
+an early version of this plugin, which relied entirely on a hand-written `AGENTS.md` rule and
+(measured directly against real session logs) got essentially no organic use as a result: the
+description alone wasn't a strong enough signal.
+
+That said, standing instructions carry more weight than a tool description competing against
+everything else in a long tool catalog. If you want to reinforce it further, add something like
+this to your `AGENTS.md` (or whatever your profile injects as standing instructions):
 
 > After marking a todo item `completed` (never while one is `in_progress`), call `context_status`.
 > If usage is climbing past roughly 70-80% of the context window, call `compact_now` too. Both are

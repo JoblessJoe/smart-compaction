@@ -33,9 +33,12 @@ const DESCRIPTION =
   'Voluntarily compact older conversation history now, at a point you know is safe: '
   + 'right after finishing a concrete step (e.g. just marked a todo item completed), '
   + 'never mid-edit or with unfinished work pending. Use this instead of waiting to be '
-  + 'interrupted by automatic compaction, if the conversation feels like it has gotten '
-  + 'long. Harmless to call speculatively — it no-ops if there is not enough history to '
-  + 'compact yet.'
+  + 'interrupted by automatic compaction. Call context_status first if unsure whether now '
+  + 'is a good time — usage past roughly 70-90% of the context window is a concrete signal '
+  + 'to call this proactively, not just a vague feeling that the conversation has gotten '
+  + 'long. As a habit: check context_status after every completed step, and call this '
+  + 'whenever that check comes back high. Harmless to call speculatively either way — it '
+  + 'no-ops if there is not enough history to compact yet.'
 
 /**
  * @param {import('@deepseek-ai/cordis').Context} ctx
@@ -125,11 +128,13 @@ export function apply(ctx) {
 const CONTEXT_STATUS_DESCRIPTION =
   'Check real, current context-window usage for this session: tokens used so far and the '
   + 'model\'s actual context-window size, whatever model this session happens to be running. '
-  + 'Use this instead of guessing whether the conversation "feels long" before deciding to call '
-  + 'compact_now — automatic compaction generally triggers well before the window fills, '
-  + 'typically somewhere around 70-90% depending on profile config, so usage climbing past that '
-  + 'range is a good signal to call compact_now proactively rather than wait to be interrupted. '
-  + 'Harmless to call anytime; read-only, never modifies the session.'
+  + 'Call this right after finishing any self-contained step — e.g. right after todo_write '
+  + 'marks an item completed, never mid-edit or with unfinished work pending — instead of '
+  + 'guessing whether the conversation "feels long." Automatic compaction generally triggers '
+  + 'well before the window fills, typically somewhere around 70-90% depending on profile '
+  + 'config, so if percentUsed comes back past that range, follow up by calling compact_now '
+  + 'proactively rather than wait to be interrupted. Harmless to call anytime — read-only, '
+  + 'never modifies the session.'
 
 function renderContextStatus(value) {
   if (!value.available) {
