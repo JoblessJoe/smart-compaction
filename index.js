@@ -33,12 +33,16 @@ const DESCRIPTION =
   'Voluntarily compact older conversation history now, at a point you know is safe: '
   + 'right after finishing a concrete step (e.g. just marked a todo item completed), '
   + 'never mid-edit or with unfinished work pending. Use this instead of waiting to be '
-  + 'interrupted by automatic compaction. Call context_status first if unsure whether now '
-  + 'is a good time — usage past roughly 70-90% of the context window is a concrete signal '
-  + 'to call this proactively, not just a vague feeling that the conversation has gotten '
-  + 'long. As a habit: check context_status after every completed step, and call this '
-  + 'whenever that check comes back high. Harmless to call speculatively either way — it '
-  + 'no-ops if there is not enough history to compact yet.'
+  + 'interrupted by automatic compaction. Do not decide this only by checking whether usage '
+  + 'is already past a fixed percentage — that is still reactive, and a step that turns out '
+  + 'bigger than expected can blow past a comfortable-looking number mid-step. Before '
+  + 'starting the next step, weigh how much room is left against what that step will '
+  + 'actually cost (a big file read, a long diff, a subagent dispatch); if it is not clearly '
+  + 'going to fit with room to spare, call this now even while usage still looks moderate. '
+  + 'Compacting a little early costs nothing; running out mid-step loses exactly the context '
+  + 'that step needed. Call context_status first if unsure how much room is actually left. '
+  + 'Harmless to call speculatively either way — it no-ops if there is not enough history to '
+  + 'compact yet.'
 
 /**
  * @param {import('@deepseek-ai/cordis').Context} ctx
@@ -130,11 +134,15 @@ const CONTEXT_STATUS_DESCRIPTION =
   + 'model\'s actual context-window size, whatever model this session happens to be running. '
   + 'Call this right after finishing any self-contained step — e.g. right after todo_write '
   + 'marks an item completed, never mid-edit or with unfinished work pending — instead of '
-  + 'guessing whether the conversation "feels long." Automatic compaction generally triggers '
-  + 'well before the window fills, typically somewhere around 70-90% depending on profile '
-  + 'config, so if percentUsed comes back past that range, follow up by calling compact_now '
-  + 'proactively rather than wait to be interrupted. Harmless to call anytime — read-only, '
-  + 'never modifies the session.'
+  + 'guessing whether the conversation "feels long." Use the result to judge whether what is '
+  + 'left is enough for the next step specifically (a big file read, a long diff, a subagent '
+  + 'dispatch), not just whether percentUsed has crossed some fixed number — a step that '
+  + 'turns out larger than expected can still blow past a comfortable-looking percentage. '
+  + 'When in doubt, call compact_now before starting that next step rather than after it runs '
+  + 'into trouble: as a hard backstop, treat anything past roughly 70-90% (depending on '
+  + 'profile config) as reason enough on its own, but do not wait for that number if the next '
+  + 'step alone looks likely to use it up. Harmless to call anytime — read-only, never '
+  + 'modifies the session.'
 
 function renderContextStatus(value) {
   if (!value.available) {

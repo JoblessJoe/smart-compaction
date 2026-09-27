@@ -97,18 +97,22 @@ an early version of this plugin, which relied entirely on a hand-written `AGENTS
 description alone wasn't a strong enough signal.
 
 That said, standing instructions carry more weight than a tool description competing against
-everything else in a long tool catalog. If you want to reinforce it further, add something like
-this to your `AGENTS.md` (or whatever your profile injects as standing instructions):
-
-> After marking a todo item `completed` (never while one is `in_progress`), call `context_status`.
-> If usage is climbing past roughly 70-80% of the context window, call `compact_now` too. Both are
-> safe to call speculatively — `context_status` is read-only, and `compact_now` no-ops if there
-> isn't enough history to compact yet.
+everything else in a long tool catalog. If you want to reinforce it further, copy
+[`agents-snippet.md`](./agents-snippet.md) into your `AGENTS.md` (or whatever your profile injects
+as standing instructions).
 
 Tying this to todo-completion matters: it's a real, already-tracked signal for "I just finished a
 self-contained unit of work," instead of asking the model to estimate its own remaining work or
 guess whether a conversation "feels long," both of which it's generally bad at. `context_status`
 replaces that guess with the real number.
+
+The snippet deliberately does *not* say "compact once usage crosses 70-80%" as the primary rule —
+a threshold check alone is still reactive: a step that turns out bigger than expected (a large
+file, a long diff, a subagent dispatch) can blow straight past a comfortable-looking percentage
+*during* that step, which is exactly the mid-step interruption this plugin exists to avoid. The
+percentage is kept only as a hard backstop; the primary check is comparing remaining headroom
+against the size of the step about to start, and compacting early — before that step, not during
+or after it — whenever the fit looks tight.
 
 ## Building from source
 
