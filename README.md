@@ -74,16 +74,22 @@ array yourself.)
 No build step, no config. Restart your dsh service after adding it — new bundles are only picked
 up on boot.
 
-**`compact_now` requires a `compaction` service on your profile.** Most profile templates ship
-one, but not all do (e.g. `@deepseek-ai/dsh-web-app`-based profiles don't by default). If yours
-doesn't, `compact_now` still installs cleanly (it won't break your profile's boot) but returns an
-error every time it's called: `"no compaction service is configured on this profile"`. Add a
-`compaction-basic` bundle to get one.
+**`compact_now` requires a `compaction` service reachable from your agent's own scope.** It reads
+`exec.agent.ctx.get('compaction')` — the calling agent's own cordis context — rather than this
+plugin's mount-time context, specifically so it still finds `compaction-basic` on profiles that
+isolate compaction per preset (e.g. `@deepseek-ai/dsh-web-app`-based profiles, where the host-plane
+row is disabled and each preset mounts its own private instance). Installing this plugin as an
+ordinary profile bundle — the normal `dsh plugin add` path — is enough; no preset-level edits
+needed. If your agent's preset genuinely has no `compaction-basic` anywhere in its scope chain,
+`compact_now` still installs cleanly (it won't break your profile's boot) but returns an error every
+time it's called: `"no compaction service is configured on this profile"`. Add a `compaction-basic`
+row somewhere in that preset (or the profile, if it isn't preset-isolated) to get one.
 
 **`context_status` requires `@deepseek-ai/dsh-token-meter` mounted** (it registers the
-`contextPressure` projection this tool reads). It's normally pulled in wherever `compaction-basic`
-is, so if `compact_now` works, `context_status` should too. If it isn't mounted, the tool still
-installs cleanly and just reports `available: false` instead of erroring.
+`contextPressure` projection this tool reads), resolved the same agent-scoped way as above. It's
+normally pulled in wherever `compaction-basic` is, so if `compact_now` works, `context_status`
+should too. If it isn't mounted, the tool still installs cleanly and just reports
+`available: false` instead of erroring.
 
 ### Tell the model when to use it
 

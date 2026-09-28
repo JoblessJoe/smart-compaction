@@ -70,12 +70,18 @@ export function apply(ctx) {
       }],
     },
     async execute(_args, exec) {
-      const compaction = ctx.get('compaction')
-      if (!compaction) {
-        throw new Error('compact_now: no compaction service is configured on this profile')
-      }
       if (!exec.agent) {
         throw new Error('compact_now requires an owning agent session')
+      }
+      // Read from the agent's own scope, not this plugin's mount-time `ctx`:
+      // profiles that isolate compaction per preset (e.g. dsh-web-app) make it
+      // invisible to a plugin mounted on the host plane, but every live agent's
+      // own `ctx` is nested inside whichever realm actually mounted it, so it
+      // sees that realm's compaction service regardless of where this plugin
+      // itself is bundled.
+      const compaction = exec.agent.ctx.get('compaction')
+      if (!compaction) {
+        throw new Error('compact_now: no compaction service is configured on this profile')
       }
       const session = exec.agent.session
       const range = selectCompactableRange(session, toolPairingBalancedBefore)
@@ -121,7 +127,9 @@ export function apply(ctx) {
       if (!exec.agent) {
         throw new Error('context_status requires an owning agent session')
       }
-      const projections = ctx.get('sessionProjections')
+      // Same reasoning as compact_now above: resolve from the agent's own
+      // scope, not this plugin's mount-time `ctx`.
+      const projections = exec.agent.ctx.get('sessionProjections')
       if (!projections) return { available: false }
       const state = projections.stateOf(exec.agent.session, 'contextPressure')
       return summarizeContextUsage(state)
