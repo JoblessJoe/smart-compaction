@@ -71,25 +71,47 @@ Run the equivalent by hand from the profile directory, e.g. `~/.dsh/profiles/web
 smart-compaction`, then add `"smart-compaction"` to that `package.json`'s `dsh.profile.bundles`
 array yourself.)
 
-No build step, no config. Restart your dsh service after adding it — new bundles are only picked
-up on boot.
+No build step. Restart your dsh service after adding it — new bundles are only picked up on boot.
 
-**`compact_now` requires a `compaction` service reachable from your agent's own scope.** It reads
-`exec.agent.ctx.get('compaction')` — the calling agent's own cordis context — rather than this
-plugin's mount-time context, specifically so it still finds `compaction-basic` on profiles that
-isolate compaction per preset (e.g. `@deepseek-ai/dsh-web-app`-based profiles, where the host-plane
-row is disabled and each preset mounts its own private instance). Installing this plugin as an
-ordinary profile bundle — the normal `dsh plugin add` path — is enough; no preset-level edits
-needed. If your agent's preset genuinely has no `compaction-basic` anywhere in its scope chain,
-`compact_now` still installs cleanly (it won't break your profile's boot) but returns an error every
-time it's called: `"no compaction service is configured on this profile"`. Add a `compaction-basic`
-row somewhere in that preset (or the profile, if it isn't preset-isolated) to get one.
+**`compact_now` requires a `compaction` service reachable from wherever this plugin itself is
+mounted** — it reads `ctx.get('compaction')` at its own mount point, nothing fancier. Most profile
+templates ship one at the host plane and the ordinary bundle install above is enough. But
+`@deepseek-ai/dsh-web-app`-based profiles are different: they disable the host-plane
+`compaction-basic` row and instead have each **preset** mount its own private instance inside an
+isolated cordis realm (`isolate: { compaction: true }`). Isolation in cordis is strictly downward —
+only a plugin mounted as a *descendant of that exact group* can see it (`vendor/cordis/src/service.ts`).
+A plugin on the host plane, including this one installed the ordinary way, is that isolated
+compaction's ancestor, not a descendant, so it can never see it no matter how cleverly it reads the
+service at call time. The only fix is a second, scoped copy of this plugin mounted as a sibling row
+inside that same isolated group — which safely coexists with the host-plane copy (dsh-tools' scoped
+tool registrations shadow the global one in a separate layer, see `ScopedLayers.merge` in
+`packages/core/scope/src/store.ts`).
+
+This package's own `postinstall` script (`scripts/mount-into-presets.mjs`) does that automatically:
+it scans `$DSH_HOME/.agent-presets/*/agent.cordis.yml` (your local, user-owned preset overrides —
+never a shipped read-only preset under `node_modules`) for any preset that already isolates
+`@deepseek-ai/dsh-compaction-basic`, and inserts a scoped `smart-compaction` row as its sibling if
+one isn't already there. It's idempotent and a no-op (with a one-line log saying so) on profiles
+that don't use presets at all. **Modern npm and pnpm block postinstall scripts by default** —
+you'll need to approve it once: `npm install-scripts approve smart-compaction`, or for pnpm, add
+`smart-compaction: true` under `allowBuilds` in the profile's `pnpm-workspace.yaml` (or run
+`pnpm approve-builds` if your pnpm version offers it) — then reinstall. If you add a new preset
+later, or skipped the approval, re-run it anytime with
+`npx smart-compaction-mount-into-presets` (or `pnpm exec smart-compaction-mount-into-presets` from
+the profile directory).
+
+If `compact_now` still errors with `"no compaction service is configured on this profile"` after
+that, your agent's preset genuinely has no `compaction-basic` anywhere in its scope chain — add one
+(see [`docs/subsystems/compaction.md`](https://github.com/deepseek-ai/deepseek-harness/blob/main/docs/subsystems/compaction.md)
+in the harness repo).
 
 **`context_status` requires `@deepseek-ai/dsh-token-meter` mounted** (it registers the
-`contextPressure` projection this tool reads), resolved the same agent-scoped way as above. It's
-normally pulled in wherever `compaction-basic` is, so if `compact_now` works, `context_status`
-should too. If it isn't mounted, the tool still installs cleanly and just reports
-`available: false` instead of erroring.
+`contextPressure` projection this tool reads). Unlike `compaction-basic`, the token meter is
+deliberately kept on the **host plane** even on preset-isolated profiles (it owns a process-wide,
+per-session projection table, not something that should come and go with which preset is mounted),
+so the ordinary host-plane install always sees it — no preset patching needed for this one. If it
+isn't mounted at all, the tool still installs cleanly and just reports `available: false` instead of
+erroring.
 
 ### Tell the model when to use it
 

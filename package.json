@@ -1,6 +1,6 @@
 {
   "name": "smart-compaction",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "description": "dsh plugin: a compact_now tool letting the model trigger compaction itself at a safe point, plus a context_status tool so it can check real token usage against its context window, instead of only the automatic token-threshold trigger.",
   "type": "module",
   "main": "./index.js",
@@ -55,8 +55,15 @@
     "index.js",
     "select-range.js",
     "context-status.js",
-    "cordis.patch.yml"
+    "cordis.patch.yml",
+    "scripts/mount-into-presets.mjs"
   ],
+  "bin": {
+    "smart-compaction-mount-into-presets": "scripts/mount-into-presets.mjs"
+  },
+  "scripts": {
+    "postinstall": "node scripts/mount-into-presets.mjs"
+  },
   "peerDependencies": {
     "@deepseek-ai/cordis": "*",
     "@deepseek-ai/dsh-compaction": "*",
