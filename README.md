@@ -28,11 +28,17 @@ Two tools, both no-argument.
   tool-call-pairing-safe boundary logic dsh's own compaction already guarantees, reimplemented
   here against dsh's *public* APIs only (no dsh core changes, no dependency on
   `compaction-basic`'s internals).
+- Posts a one-line "Compacting now" notice to the chat *before* calling `compactRegion()`, not
+  after — the summarization call is one extra model request and can take a while (minutes, on a
+  local model), and without this the chat just looks stuck between the tool call and its result.
+  Tagged `kind: 'plugin', form: 'notice'` (the same tagging dsh-compaction-basic's own checkpoint
+  messages and other host-generated asides use), so it renders as a collapsed system aside, not as
+  if the user typed it, and needs no model output of its own.
 - Calls dsh's own `ctx.compaction.compactRegion()` to actually do the compaction — the same
   summarizer, the same durable `compaction/start`/`compaction/end` log events, the same guarantees
   as any other compaction in the session.
 - No-ops harmlessly (`"Not enough compactable history yet."`) if there isn't enough history yet —
-  safe for the model to call speculatively.
+  safe for the model to call speculatively. No notice is posted for a no-op call.
 
 **`context_status`**
 

@@ -17,8 +17,15 @@
 
 import { toolPairingBalancedBefore } from '@deepseek-ai/dsh-compaction'
 import { defineTool } from '@deepseek-ai/dsh-tools'
+import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { summarizeContextUsage } from './context-status.js'
 import { selectCompactableRange } from './select-range.js'
+
+const PLUGIN_SOURCE = { kind: 'plugin', plugin: 'smart-compaction' }
+const STARTED_NOTICE_TEXT =
+  '⏳ Compacting now — summarizing older history. This runs one extra model '
+  + 'call and can take a while on a local model; the chat will look idle '
+  + 'until it lands.'
 
 export const name = 'tool-compact-now'
 // `compaction` deliberately NOT in `inject`: that would make this plugin's
@@ -82,6 +89,19 @@ export function apply(ctx) {
       if (range === null) {
         return { compacted: false }
       }
+      // Posted before the slow part (the summarization model call inside
+      // compactRegion, which can run minutes on a local model), not after:
+      // without this, the chat shows nothing between the tool call and its
+      // result and looks stuck. `session.append` publishes synchronously to
+      // live observers (the web UI's own stream), independent of how long
+      // this execute() call itself takes to resolve. `kind: 'plugin'` +
+      // `form: 'notice'` is the same tagging dsh-compaction-basic and
+      // repeat-tool-reminder use for host-generated asides — collapsed by
+      // default, never rendered as if the user typed it.
+      session.append('user/message', createUserMessage({
+        content: [{ type: 'text', text: STARTED_NOTICE_TEXT }],
+        source: { ...PLUGIN_SOURCE, form: 'notice', summary: 'Compacting now' },
+      }), { surfaceOp: 'append' })
       let result
       try {
         result = await compaction.compactRegion(range.start, range.end, exec.agent, exec.signal)
