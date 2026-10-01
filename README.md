@@ -1,5 +1,5 @@
 <p align="center">
-  <img src=".github/assets/banner.svg" alt="smart-compaction: dsh auto-compacts mid-task; with smart-compaction the model compacts between tasks" width="100%">
+  <img src="https://raw.githubusercontent.com/JoblessJoe/smart-compaction/main/.github/assets/banner.svg" alt="smart-compaction: dsh auto-compacts mid-task; with smart-compaction the model compacts between tasks" width="100%">
 </p>
 
 <p align="center">

@@ -1,6 +1,6 @@
 {
   "name": "smart-compaction",
-  "version": "0.2.11",
+  "version": "0.2.12",
   "description": "dsh plugin: a compact_now tool letting the model trigger compaction itself at a safe point, plus a context_status tool so it can check real token usage against its context window, instead of only the automatic token-threshold trigger.",
   "type": "module",
   "main": "./index.js",
