@@ -1,10 +1,24 @@
-# smart-compaction
+<p align="center">
+  <img src=".github/assets/banner.svg" alt="smart-compaction: dsh auto-compacts mid-task; with smart-compaction the model compacts between tasks" width="100%">
+</p>
 
-A [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (dsh) plugin that gives the
-model two tools: `compact_now`, so it can trigger compaction itself at a point *it* knows is safe
-— right after finishing a step, never mid-edit — instead of only ever being interrupted by dsh's
-automatic token-threshold trigger; and `context_status`, so it can check real, current token
-usage against its actual context window instead of guessing whether a conversation "feels long."
+<p align="center">
+  <a href="https://www.npmjs.com/package/smart-compaction"><img src="https://img.shields.io/npm/v/smart-compaction?color=a78bfa&label=npm" alt="npm version"></a>
+  <a href="https://www.npmjs.com/package/smart-compaction"><img src="https://img.shields.io/npm/dm/smart-compaction?color=a78bfa" alt="npm downloads"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/JoblessJoe/smart-compaction?color=a78bfa" alt="MIT license"></a>
+</p>
+
+A [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (dsh) plugin that lets the model decide **when** to compact its own context, instead of being cut off mid-task by a blind token threshold.
+
+- **`compact_now`:** compacts at a point the model knows is safe, e.g. right after finishing a todo. Works mid-turn.
+- **`context_status`:** real token usage against the session's actual context window, so the model stops guessing.
+- **No config, no core changes:** built only on dsh's public compaction APIs.
+
+```bash
+dsh plugin --profile web add smart-compaction
+```
+
+Restart dsh and you're done. Details and edge cases under [Install](#install).
 
 ## Why
 
@@ -79,6 +93,9 @@ array yourself.)
 
 No build step. Restart your dsh service after adding it — new bundles are only picked up on boot.
 
+<details>
+<summary><b>Requirements and preset-isolated profiles</b> (read this if <code>compact_now</code> says no compaction service is configured)</summary>
+
 **`compact_now` requires a `compaction` service reachable from wherever this plugin itself is
 mounted** — it reads `ctx.get('compaction')` at its own mount point, nothing fancier. Most profile
 templates ship one at the host plane and the ordinary bundle install above is enough. But
@@ -118,6 +135,8 @@ per-session projection table, not something that should come and go with which p
 so the ordinary host-plane install always sees it — no preset patching needed for this one. If it
 isn't mounted at all, the tool still installs cleanly and just reports `available: false` instead of
 erroring.
+
+</details>
 
 ### Tell the model when to use it
 
