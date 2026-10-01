@@ -12,6 +12,7 @@ A [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (dsh) plug
 
 - **`compact_now`:** compacts at a point the model knows is safe, e.g. right after finishing a todo. Works mid-turn.
 - **`context_status`:** real token usage against the session's actual context window, so the model stops guessing.
+- **Automatic safe-point compaction:** local models rarely call a tool like this on their own, so the plugin also compacts by itself the moment a todo item is marked done and the context is over half full. No model decision needed.
 - **No config, no core changes:** built only on dsh's public compaction APIs.
 
 ```bash
@@ -45,8 +46,8 @@ Two tools, both no-argument.
 - Posts a one-line "Compacting now" notice to the chat *before* calling `compactRegion()`, not
   after — the summarization call is one extra model request and can take a while (minutes, on a
   local model), and without this the chat just looks stuck between the tool call and its result.
-  Tagged `kind: 'plugin', form: 'notice'` (the same tagging dsh-compaction-basic's own checkpoint
-  messages and other host-generated asides use), so it renders as a collapsed system aside, not as
+  Tagged with its own source kind and `form: 'notice'` (the same tagging dsh-compaction-basic's own
+  checkpoint messages and other host-generated asides use), so it renders as a collapsed system aside, not as
   if the user typed it, and needs no model output of its own.
 - Calls dsh's own `ctx.compaction.compactRegion()` to actually do the compaction — the same
   summarizer, the same durable `compaction/start`/`compaction/end` log events, the same guarantees
@@ -68,6 +69,22 @@ Two tools, both no-argument.
 - Exists because, without it, the model has zero visibility into its own context usage — the
   only prior signal was a vague "if the conversation feels long" in `compact_now`'s own
   description.
+
+**Automatic safe-point compaction**
+
+- Watches `todo_write`. When an item flips to `completed`, that's a finished step: a safe place
+  to cut.
+- If usage is past `safePointRatio` (default **0.5**) at that moment, the next step starts on
+  compacted history. Same notice, same `compactRegion()` path as `compact_now`.
+- dsh's own 80% trigger stays as the backstop; this just gets there first, at a clean boundary.
+- A failure here never breaks the turn. It logs a warning and the backstop takes over.
+- Tune or turn it off in your profile's `cordis.patch.yml`:
+
+  ```yaml
+  - id: tool-compact-now
+    config:
+      safePointRatio: 0.6   # or false to disable
+  ```
 
 ## How it works
 

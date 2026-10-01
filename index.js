@@ -20,8 +20,11 @@ import { defineTool } from '@deepseek-ai/dsh-tools'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { summarizeContextUsage } from './context-status.js'
 import { selectCompactableRange } from './select-range.js'
+import { completedCount, DEFAULT_SAFE_POINT_RATIO, finishedStep, overSafePointRatio } from './safe-point.js'
 
-const PLUGIN_SOURCE = { kind: 'plugin', plugin: 'smart-compaction' }
+// dsh 0.2 (session format v4) rejects the old generic `kind: 'plugin'` wrapper:
+// every producer stamps its own kind, like repeat-tool-reminder does.
+const PLUGIN_SOURCE = { kind: 'smart-compaction' }
 const STARTED_NOTICE_TEXT =
   '⏳ Compacting now — summarizing older history. This runs one extra model '
   + 'call and can take a while on a local model; the chat will look idle '
@@ -52,9 +55,47 @@ const DESCRIPTION =
   + 'compact yet.'
 
 /**
- * @param {import('@deepseek-ai/cordis').Context} ctx
+ * Compact the largest safe span of `agent`'s history. Shared by the
+ * `compact_now` tool and the automatic safe-point trigger.
+ * @returns {Promise<{ compacted: false } | { compacted: true, shadowedCount: number, shadowedTokenCount: number }>}
  */
-export function apply(ctx) {
+async function compactAgent(compaction, agent, signal, notice) {
+  const session = agent.session
+  const range = selectCompactableRange(session, toolPairingBalancedBefore)
+  if (range === null) return { compacted: false }
+  // Posted before the slow part (the summarization model call inside
+  // compactRegion, which can run minutes on a local model), not after:
+  // without this, the chat shows nothing until it lands and looks stuck.
+  // `session.append` publishes synchronously to live observers.
+  // An own `kind` + `form: 'notice'` is the same tagging
+  // dsh-compaction-basic and repeat-tool-reminder use for host-generated
+  // asides — collapsed by default, never rendered as if the user typed it.
+  session.append('user/message', createUserMessage({
+    content: [{ type: 'text', text: notice }],
+    source: { ...PLUGIN_SOURCE, form: 'notice', summary: 'Compacting now' },
+  }), { surfaceOp: 'append' })
+  const result = await compaction.compactRegion(range.start, range.end, agent, signal)
+  return {
+    compacted: true,
+    shadowedCount: result.shadowedSeqs.length,
+    shadowedTokenCount: result.shadowedTokenCount,
+  }
+}
+
+/** Current usage for `session`, via token-meter's contextPressure projection. */
+function usageOf(ctx, session) {
+  const projections = ctx.get('sessionProjections')
+  if (!projections) return { available: false }
+  return summarizeContextUsage(projections.stateOf(session, 'contextPressure'))
+}
+
+/**
+ * @param {import('@deepseek-ai/cordis').Context} ctx
+ * @param {{ safePointRatio?: number | false }} [config] - `safePointRatio`:
+ *   usage fraction (0-1) at which finishing a todo item compacts
+ *   automatically; `false` turns the automatic trigger off. Default 0.5.
+ */
+export function apply(ctx, config = {}) {
   ctx.tools.register(defineTool({
     name: 'compact_now',
     description: DESCRIPTION,
@@ -84,37 +125,10 @@ export function apply(ctx) {
       if (!exec.agent) {
         throw new Error('compact_now requires an owning agent session')
       }
-      const session = exec.agent.session
-      const range = selectCompactableRange(session, toolPairingBalancedBefore)
-      if (range === null) {
-        return { compacted: false }
-      }
-      // Posted before the slow part (the summarization model call inside
-      // compactRegion, which can run minutes on a local model), not after:
-      // without this, the chat shows nothing between the tool call and its
-      // result and looks stuck. `session.append` publishes synchronously to
-      // live observers (the web UI's own stream), independent of how long
-      // this execute() call itself takes to resolve. `kind: 'plugin'` +
-      // `form: 'notice'` is the same tagging dsh-compaction-basic and
-      // repeat-tool-reminder use for host-generated asides — collapsed by
-      // default, never rendered as if the user typed it.
-      session.append('user/message', createUserMessage({
-        content: [{ type: 'text', text: STARTED_NOTICE_TEXT }],
-        source: { ...PLUGIN_SOURCE, form: 'notice', summary: 'Compacting now' },
-      }), { surfaceOp: 'append' })
-      let result
       try {
-        result = await compaction.compactRegion(range.start, range.end, exec.agent, exec.signal)
+        return await compactAgent(compaction, exec.agent, exec.signal, STARTED_NOTICE_TEXT)
       } catch (error) {
-        // The four errors compactRegion's own range validation can throw all
-        // indicate this file's range-selection logic disagrees with core's —
-        // a bug here, not an expected runtime outcome. Surface it plainly.
         throw new Error(`compact_now: compaction failed: ${error instanceof Error ? error.message : String(error)}`)
-      }
-      return {
-        compacted: true,
-        shadowedCount: result.shadowedSeqs.length,
-        shadowedTokenCount: result.shadowedTokenCount,
       }
     },
   }))
@@ -147,6 +161,48 @@ export function apply(ctx) {
       return summarizeContextUsage(state)
     },
   }))
+
+  // --- automatic safe-point compaction (see safe-point.js) ---------------
+  // Local models rarely call compact_now on their own, so the plugin also
+  // compacts by itself: a todo item flipping to completed marks a safe
+  // boundary, and the next step starts on compacted history if usage is past
+  // `safePointRatio`. Core's own 80% trigger stays as the backstop.
+  const ratio = config.safePointRatio ?? DEFAULT_SAFE_POINT_RATIO
+  if (ratio === false) return
+  if (typeof ratio !== 'number' || !(ratio > 0 && ratio < 1)) {
+    throw new Error(`smart-compaction: safePointRatio must be a number between 0 and 1, or false (got ${ratio})`)
+  }
+  const lastCompleted = new WeakMap()
+  const atSafePoint = new WeakSet()
+
+  ctx.on('tools/post-execute', async (exec, _result, next) => {
+    if (exec.agent && exec.name === 'todo_write') {
+      const done = completedCount(exec.arguments)
+      if (finishedStep(lastCompleted.get(exec.agent), done)) atSafePoint.add(exec.agent)
+      lastCompleted.set(exec.agent, done)
+    }
+    return next()
+  })
+
+  ctx.on('agent/pre-step', async ({ agent, signal }, next) => {
+    if (!atSafePoint.has(agent) || signal.aborted) return next()
+    atSafePoint.delete(agent)
+    // Not mounted next to a compaction service (e.g. the host-plane copy on a
+    // preset-isolated profile): the in-realm copy handles it.
+    const compaction = ctx.get('compaction')
+    if (!compaction) return next()
+    const usage = usageOf(ctx, agent.session)
+    if (!overSafePointRatio(usage, ratio)) return next()
+    try {
+      await compactAgent(compaction, agent, signal,
+        `⏳ Step finished with ${usage.percentUsed}% of the context used — compacting now, `
+        + 'before the next step. This runs one extra model call and can take a while on a local model.')
+    } catch (error) {
+      // Never break the turn: core's own pressure trigger is still the backstop.
+      console.warn(`smart-compaction: safe-point compaction failed: ${error instanceof Error ? error.message : String(error)}`)
+    }
+    return next()
+  })
 }
 
 const CONTEXT_STATUS_DESCRIPTION =

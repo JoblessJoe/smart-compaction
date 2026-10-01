@@ -7,6 +7,7 @@
 import assert from 'node:assert/strict'
 import { summarizeContextUsage } from './context-status.js'
 import { selectCompactableRange } from './select-range.js'
+import { completedCount, finishedStep, overSafePointRatio } from './safe-point.js'
 
 /**
  * @param {{ type: string }[]} events - event at index i has seq i.
@@ -131,6 +132,21 @@ async function main() {
       surfaceTokens: 100,
     })
     assert.equal(result.usedTokens, 0)
+  }
+
+  console.log('safe-point: completed count, step detection, ratio gate...')
+  {
+    const todos = s => ({ todos: s.map(status => ({ content: 'x', status })) })
+    assert.equal(completedCount(todos(['completed', 'in_progress', 'completed'])), 2)
+    assert.equal(completedCount(undefined), 0)
+    assert.equal(completedCount({ todos: 'nope' }), 0)
+    assert.equal(finishedStep(undefined, 1), true, 'first completion counts')
+    assert.equal(finishedStep(1, 1), false, 'status-only rewrite is not a finished step')
+    assert.equal(finishedStep(3, 0), false, 'new list resets, not a step')
+    assert.equal(overSafePointRatio({ available: true, percentUsed: 55 }, 0.5), true)
+    assert.equal(overSafePointRatio({ available: true, percentUsed: 40 }, 0.5), false)
+    assert.equal(overSafePointRatio({ available: true, usedTokens: 9 }, 0.5), false, 'unknown window -> no')
+    assert.equal(overSafePointRatio({ available: false }, 0.5), false)
   }
 
   console.log('\nall passed.')
