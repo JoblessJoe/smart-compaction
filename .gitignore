@@ -4,3 +4,4 @@ npm-debug.log*
 .claude/
 CLAUDE.md
 AGENTS.md
+agents-snippet.md
