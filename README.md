@@ -131,9 +131,19 @@ an early version of this plugin, which relied entirely on a hand-written `AGENTS
 description alone wasn't a strong enough signal.
 
 That said, standing instructions carry more weight than a tool description competing against
-everything else in a long tool catalog. If you want to reinforce it further, copy
-[`agents-snippet.md`](./agents-snippet.md) into your `AGENTS.md` (or whatever your profile injects
-as standing instructions).
+everything else in a long tool catalog. If you want to reinforce it further, copy this
+into your `AGENTS.md` (or whatever your profile injects as standing instructions):
+
+> After marking a todo item `completed` (never while one is `in_progress`), call `context_status`.
+> Don't just compare the number to a fixed threshold — that's still reactive, and a step that
+> turns out bigger than expected can blow past a comfortable-looking percentage mid-step. Instead,
+> weigh what's left against what the *next* step will actually cost (a big file read, a long diff,
+> a subagent dispatch); if it's not clearly going to fit with room to spare, call `compact_now`
+> now, even while usage still looks moderate. Compacting a little early costs nothing; running out
+> mid-step loses exactly the context that step needed. As a hard backstop, usage past roughly
+> 70-80% of the context window is reason enough to compact regardless. Both tools are safe to call
+> speculatively — `context_status` is read-only, and `compact_now` no-ops if there isn't enough
+> history to compact yet.
 
 Tying this to todo-completion matters: it's a real, already-tracked signal for "I just finished a
 self-contained unit of work," instead of asking the model to estimate its own remaining work or
