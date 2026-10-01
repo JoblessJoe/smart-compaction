@@ -1,3 +1,6 @@
 node_modules/
 pnpm-lock.yaml
 npm-debug.log*
+.claude/
+CLAUDE.md
+AGENTS.md
