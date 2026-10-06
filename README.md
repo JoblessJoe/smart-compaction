@@ -6,6 +6,7 @@
   <a href="https://www.npmjs.com/package/smart-compaction"><img src="https://img.shields.io/npm/v/smart-compaction?color=a78bfa&label=npm" alt="npm version"></a>
   <a href="https://www.npmjs.com/package/smart-compaction"><img src="https://img.shields.io/npm/dm/smart-compaction?color=a78bfa" alt="npm downloads"></a>
   <a href="LICENSE"><img src="https://img.shields.io/github/license/JoblessJoe/smart-compaction?color=a78bfa" alt="MIT license"></a>
+  <a href="https://joblessjoe.com/smart-compaction"><img src="https://img.shields.io/badge/website-joblessjoe.com-a78bfa" alt="project page on joblessjoe.com"></a>
 </p>
 
 A [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (dsh) plugin that lets the model decide **when** to compact its own context, instead of being cut off mid-task by a blind token threshold.
