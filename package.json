@@ -1,6 +1,6 @@
 {
   "name": "smart-compaction",
-  "version": "0.3.5",
+  "version": "0.3.6",
   "description": "dsh plugin: a compact_now tool letting the model trigger compaction itself at a safe point, plus a context_status tool so it can check real token usage against its context window, instead of only the automatic token-threshold trigger.",
   "homepage": "https://joblessjoe.com/smart-compaction",
   "type": "module",
@@ -18,7 +18,9 @@
     "dsh",
     "deepseek-harness",
     "compaction",
-    "context-management"
+    "context-management",
+    "上下文压缩",
+    "dsh插件"
   ],
   "dsh": {
     "bundle": {

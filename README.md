@@ -9,6 +9,8 @@
   <a href="https://joblessjoe.com/smart-compaction"><img src="https://img.shields.io/badge/website-joblessjoe.com-a78bfa" alt="project page on joblessjoe.com"></a>
 </p>
 
+> **中文简介** · DeepSeek Harness (dsh) 插件：让模型自己决定**何时**压缩上下文，而不是在任务中途被固定的 token 阈值打断。提供 `compact_now`（在安全时机压缩，回合中途也可用）和 `context_status`（对照会话实际的上下文窗口显示真实 token 用量）；某个待办事项完成且上下文已用过半时，也会自动压缩。无需配置，不改动 dsh 核心。<br>安装：`dsh plugin --profile web add smart-compaction`
+
 A [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (dsh) plugin that lets the model decide **when** to compact its own context, instead of being cut off mid-task by a blind token threshold.
 
 - **`compact_now`:** compacts at a point the model knows is safe, e.g. right after finishing a todo. Works mid-turn.
