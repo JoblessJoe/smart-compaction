@@ -9,7 +9,7 @@
   <a href="https://joblessjoe.com/smart-compaction"><img src="https://img.shields.io/badge/website-joblessjoe.com-a78bfa" alt="project page on joblessjoe.com"></a>
 </p>
 
-> **中文简介** · DeepSeek Harness (dsh) 插件：让模型自己决定**何时**压缩上下文，而不是在任务中途被固定的 token 阈值打断。提供 `compact_now`（在安全时机压缩，回合中途也可用）和 `context_status`（对照会话实际的上下文窗口显示真实 token 用量）；某个待办事项完成且上下文已用过半时，也会自动压缩。无需配置，不改动 dsh 核心。<br>安装：`dsh plugin --profile web add smart-compaction`
+> **中文简介** · DeepSeek Harness (dsh) 插件：让模型自己决定**何时**压缩上下文，而不是在任务中途被固定的 token 阈值打断。提供 `compact_now`（在安全时机压缩，回合中途也可用）和 `context_status`（对照会话实际的上下文窗口显示真实 token 用量）；某个待办事项完成且上下文已用过半时，也会自动压缩。无需配置，不改动 dsh 核心。<br>安装：`npx @deepseek-ai/dsh plugin --profile web add smart-compaction --allow-build=smart-compaction`（web 配置实时加载，无需重启）
 
 A [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (dsh) plugin that lets the model decide **when** to compact its own context, instead of being cut off mid-task by a blind token threshold.
 
@@ -19,10 +19,10 @@ A [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (dsh) plug
 - **No config, no core changes:** built only on dsh's public compaction APIs.
 
 ```bash
-dsh plugin --profile web add smart-compaction
+npx @deepseek-ai/dsh plugin --profile web add smart-compaction --allow-build=smart-compaction
 ```
 
-Restart dsh and you're done. Details and edge cases under [Install](#install).
+The web profile reloads live, so there's nothing to restart. Details and edge cases under [Install](#install).
 
 ## Why
 
@@ -99,19 +99,26 @@ always runs mid-turn — that's what calling a tool means — so `compact_now` i
 
 ## Install
 
-From your dsh **web profile** (`web` below is the profile name; use whichever profile backs your
-session):
+Into your dsh **web profile** (`web` below is the profile name; use whichever profile backs your
+session). From a source checkout, use `pnpm dsh` instead of `npx @deepseek-ai/dsh`:
 
 ```bash
-dsh plugin --profile web add smart-compaction
+npx @deepseek-ai/dsh plugin --profile web add smart-compaction --allow-build=smart-compaction
 ```
+
+`--allow-build` lets the package's `postinstall` script run (see below). dsh's pnpm blocks install
+scripts by default: without the flag the install fails with `ERR_PNPM_IGNORED_BUILDS` and leaves the
+package added but not selected as a bundle. In that case remove it
+(`npx @deepseek-ai/dsh plugin --profile web remove smart-compaction`) and add it again with the flag.
 
 This installs the package and adds it to `dsh.profile.bundles` for you. (No local `dsh` binary?
 Run the equivalent by hand from the profile directory, e.g. `~/.dsh/profiles/web/`: `pnpm add
 smart-compaction`, then add `"smart-compaction"` to that `package.json`'s `dsh.profile.bundles`
 array yourself.)
 
-No build step. Restart your dsh service after adding it — new bundles are only picked up on boot.
+No build step, no restart: the shipped `web` profile reloads live, and the plugin shows up under
+**Plugins** right away. Profiles without live reload (`tui`, `headless`, …) pick it up on their next
+start.
 
 <details>
 <summary><b>Requirements and preset-isolated profiles</b> (read this if <code>compact_now</code> says no compaction service is configured)</summary>
@@ -135,10 +142,8 @@ it scans `$DSH_HOME/.agent-presets/*/agent.cordis.yml` (your local, user-owned p
 never a shipped read-only preset under `node_modules`) for any preset that already isolates
 `@deepseek-ai/dsh-compaction-basic`, and inserts a scoped `smart-compaction` row as its sibling if
 one isn't already there. It's idempotent and a no-op (with a one-line log saying so) on profiles
-that don't use presets at all. **Modern npm and pnpm block postinstall scripts by default** —
-you'll need to approve it once: `npm install-scripts approve smart-compaction`, or for pnpm, add
-`smart-compaction: true` under `allowBuilds` in the profile's `pnpm-workspace.yaml` (or run
-`pnpm approve-builds` if your pnpm version offers it) — then reinstall. If you add a new preset
+that don't use presets at all. **pnpm blocks postinstall scripts by default**, which is why the
+install command passes `--allow-build=smart-compaction`. If you add a new preset
 later, or skipped the approval, re-run it anytime with
 `npx smart-compaction-mount-into-presets` (or `pnpm exec smart-compaction-mount-into-presets` from
 the profile directory).
