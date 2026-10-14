@@ -18,7 +18,8 @@ A [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (dsh) plug
 - **No config, no core changes:** built only on dsh's public compaction APIs.
 
 ```bash
-npx @deepseek-ai/dsh plugin --profile web add smart-compaction --allow-build=smart-compaction
+npx @deepseek-ai/dsh plugin --profile web add smart-compaction
+npx -p smart-compaction smart-compaction-mount-into-presets   # web profile: mount into your presets
 ```
 
 The web profile reloads live, so there's nothing to restart. Details and edge cases under [Install](#install).
@@ -102,13 +103,8 @@ Into your dsh **web profile** (`web` below is the profile name; use whichever pr
 session). From a source checkout, use `pnpm dsh` instead of `npx @deepseek-ai/dsh`:
 
 ```bash
-npx @deepseek-ai/dsh plugin --profile web add smart-compaction --allow-build=smart-compaction
+npx @deepseek-ai/dsh plugin --profile web add smart-compaction
 ```
-
-`--allow-build` lets the package's `postinstall` script run (see below). dsh's pnpm blocks install
-scripts by default: without the flag the install fails with `ERR_PNPM_IGNORED_BUILDS` and leaves the
-package added but not selected as a bundle. In that case remove it
-(`npx @deepseek-ai/dsh plugin --profile web remove smart-compaction`) and add it again with the flag.
 
 This installs the package and adds it to `dsh.profile.bundles` for you. (No local `dsh` binary?
 Run the equivalent by hand from the profile directory, e.g. `~/.dsh/profiles/web/`: `pnpm add
@@ -118,6 +114,15 @@ array yourself.)
 No build step, no restart: the shipped `web` profile reloads live, and the plugin shows up under
 **Plugins** right away. Profiles without live reload (`tui`, `headless`, …) pick it up on their next
 start.
+
+**On the shipped `web` profile, also run this once** (why: see below):
+
+```bash
+npx -p smart-compaction smart-compaction-mount-into-presets
+```
+
+**Uninstall:** run the same command with `--remove` first, then
+`npx @deepseek-ai/dsh plugin --profile web remove smart-compaction`.
 
 <details>
 <summary><b>Requirements and preset-isolated profiles</b> (read this if <code>compact_now</code> says no compaction service is configured)</summary>
@@ -136,16 +141,14 @@ inside that same isolated group — which safely coexists with the host-plane co
 tool registrations shadow the global one in a separate layer, see `ScopedLayers.merge` in
 `packages/core/scope/src/store.ts`).
 
-This package's own `postinstall` script (`scripts/mount-into-presets.mjs`) does that automatically:
-it scans `$DSH_HOME/.agent-presets/*/agent.cordis.yml` (your local, user-owned preset overrides —
-never a shipped read-only preset under `node_modules`) for any preset that already isolates
-`@deepseek-ai/dsh-compaction-basic`, and inserts a scoped `smart-compaction` row as its sibling if
-one isn't already there. It's idempotent and a no-op (with a one-line log saying so) on profiles
-that don't use presets at all. **pnpm blocks postinstall scripts by default**, which is why the
-install command passes `--allow-build=smart-compaction`. If you add a new preset
-later, or skipped the approval, re-run it anytime with
-`npx smart-compaction-mount-into-presets` (or `pnpm exec smart-compaction-mount-into-presets` from
-the profile directory).
+`scripts/mount-into-presets.mjs` (the `smart-compaction-mount-into-presets` command above) does
+that: it scans `$DSH_HOME/.agent-presets/*/agent.cordis.yml` (your local, user-owned preset
+overrides — never a shipped read-only preset under `node_modules`) for any preset that already
+isolates `@deepseek-ai/dsh-compaction-basic`, and inserts a scoped `smart-compaction` row as its
+sibling if one isn't already there. It's idempotent and a no-op (with a one-line log saying so) on
+profiles that don't use presets at all. It is deliberately **not** an install script: installing
+never edits your presets on its own. Re-run it after adding a new preset; `--remove` takes the
+rows out again and leaves each file byte-for-byte as before.
 
 If `compact_now` still errors with `"no compaction service is configured on this profile"` after
 that, your agent's preset genuinely has no `compaction-basic` anywhere in its scope chain — add one
@@ -246,4 +249,4 @@ model/summarizer-side issue, not something `compact_now` itself controls.
 
 MIT
 
-> **中文简介** · DeepSeek Harness (dsh) 插件：让模型自己决定**何时**压缩上下文，而不是在任务中途被固定的 token 阈值打断。提供 `compact_now`（在安全时机压缩，回合中途也可用）和 `context_status`（对照会话实际的上下文窗口显示真实 token 用量）；某个待办事项完成且上下文已用过半时，也会自动压缩。无需配置，不改动 dsh 核心。<br>安装：`npx @deepseek-ai/dsh plugin --profile web add smart-compaction --allow-build=smart-compaction`（web 配置实时加载，无需重启）
+> **中文简介** · DeepSeek Harness (dsh) 插件：让模型自己决定**何时**压缩上下文，而不是在任务中途被固定的 token 阈值打断。提供 `compact_now`（在安全时机压缩，回合中途也可用）和 `context_status`（对照会话实际的上下文窗口显示真实 token 用量）；某个待办事项完成且上下文已用过半时，也会自动压缩。无需配置，不改动 dsh 核心。<br>安装：`npx @deepseek-ai/dsh plugin --profile web add smart-compaction`，web 配置还需运行一次 `npx -p smart-compaction smart-compaction-mount-into-presets`（web 配置实时加载，无需重启）

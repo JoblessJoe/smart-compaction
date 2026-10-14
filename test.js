@@ -7,6 +7,7 @@
 import assert from 'node:assert/strict'
 import { summarizeContextUsage } from './context-status.js'
 import { selectCompactableRange } from './select-range.js'
+import { patchPresetText, unpatchPresetText } from './scripts/mount-into-presets.mjs'
 import { completedCount, finishedStep, overSafePointRatio } from './safe-point.js'
 
 /**
@@ -147,6 +148,26 @@ async function main() {
     assert.equal(overSafePointRatio({ available: true, percentUsed: 40 }, 0.5), false)
     assert.equal(overSafePointRatio({ available: true, usedTokens: 9 }, 0.5), false, 'unknown window -> no')
     assert.equal(overSafePointRatio({ available: false }, 0.5), false)
+  }
+
+  console.log('13) preset mount / --remove round-trips byte-for-byte...')
+  {
+    const preset = [
+      'plugins:',
+      '  - id: compaction-basic',
+      "    name: '@deepseek-ai/dsh-compaction-basic'",
+      '    config:',
+      '      ratio: 0.8',
+      '',
+      'other: true',
+      '',
+    ].join('\n')
+    const mounted = patchPresetText(preset)
+    assert.match(mounted, /\n {2}- id: smart-compaction\n {4}name: smart-compaction\n/)
+    assert.equal(patchPresetText(mounted), null, 'already mounted -> no-op')
+    assert.equal(unpatchPresetText(mounted), preset)
+    assert.equal(unpatchPresetText(preset), null, 'not mounted -> no-op')
+    assert.equal(patchPresetText('plugins: []\n'), null, 'no isolated compaction -> no-op')
   }
 
   console.log('\nall passed.')
