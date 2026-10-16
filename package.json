@@ -1,6 +1,6 @@
 {
   "name": "smart-compaction",
-  "version": "0.3.11",
+  "version": "0.3.12",
   "description": "dsh plugin: a compact_now tool letting the model trigger compaction itself at a safe point, plus a context_status tool so it can check real token usage against its context window, instead of only the automatic token-threshold trigger.",
   "homepage": "https://joblessjoe.com/smart-compaction",
   "type": "module",
@@ -27,7 +27,7 @@
       "patch": "./cordis.patch.yml"
     },
     "compatibility": {
-      "dsh": ">=0.1.5-rc.3"
+      "dsh": ">=0.2.0-rc.2"
     }
   },
   "dshhub": {
@@ -49,7 +49,7 @@
       ]
     },
     "compatibility": {
-      "dsh": ">=0.1.5-rc.3",
+      "dsh": ">=0.2.0-rc.2",
       "node": ">=22"
     },
     "permissions": {}
@@ -59,20 +59,16 @@
     "select-range.js",
     "context-status.js",
     "safe-point.js",
-    "cordis.patch.yml",
-    "scripts/mount-into-presets.mjs"
+    "cordis.patch.yml"
   ],
-  "bin": {
-    "smart-compaction-mount-into-presets": "scripts/mount-into-presets.mjs"
-  },
   "scripts": {
     "test": "node test.js"
   },
   "peerDependencies": {
-    "@deepseek-ai/cordis": "*",
-    "@deepseek-ai/dsh-compaction": "*",
-    "@deepseek-ai/dsh-llm": "*",
-    "@deepseek-ai/dsh-tools": "*"
+    "@deepseek-ai/cordis": "^4.0.0",
+    "@deepseek-ai/dsh-compaction": ">=0.2.0-rc.2",
+    "@deepseek-ai/dsh-llm": ">=0.2.0-rc.2",
+    "@deepseek-ai/dsh-tools": ">=0.2.0-rc.2"
   },
   "devDependencies": {
     "@deepseek-ai/dsh-compaction": "0.0.1-rc.5",

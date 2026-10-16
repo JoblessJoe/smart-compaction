@@ -82,6 +82,15 @@ async function compactAgent(compaction, agent, signal, notice) {
   }
 }
 
+/**
+ * The compaction service `agent` runs with. Simple profiles mount it on the
+ * host plane next to this plugin; dsh-web-app presets mount a private one
+ * inside an isolated group, reachable only through the preset registry.
+ */
+function compactionFor(ctx, agent) {
+  return ctx.get('compaction') ?? ctx.get('agentPresets')?.serviceFor(agent, 'compaction')
+}
+
 /** Current usage for `session`, via token-meter's contextPressure projection. */
 function usageOf(ctx, session) {
   const projections = ctx.get('sessionProjections')
@@ -118,12 +127,12 @@ export function apply(ctx, config = {}) {
       }],
     },
     async execute(_args, exec) {
-      const compaction = ctx.get('compaction')
-      if (!compaction) {
-        throw new Error('compact_now: no compaction service is configured on this profile')
-      }
       if (!exec.agent) {
         throw new Error('compact_now requires an owning agent session')
+      }
+      const compaction = compactionFor(ctx, exec.agent)
+      if (!compaction) {
+        throw new Error('compact_now: no compaction service is configured for this agent')
       }
       try {
         return await compactAgent(compaction, exec.agent, exec.signal, STARTED_NOTICE_TEXT)
@@ -187,9 +196,7 @@ export function apply(ctx, config = {}) {
   ctx.on('agent/pre-step', async ({ agent, signal }, next) => {
     if (!atSafePoint.has(agent) || signal.aborted) return next()
     atSafePoint.delete(agent)
-    // Not mounted next to a compaction service (e.g. the host-plane copy on a
-    // preset-isolated profile): the in-realm copy handles it.
-    const compaction = ctx.get('compaction')
+    const compaction = compactionFor(ctx, agent)
     if (!compaction) return next()
     const usage = usageOf(ctx, agent.session)
     if (!overSafePointRatio(usage, ratio)) return next()

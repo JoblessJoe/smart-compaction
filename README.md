@@ -19,7 +19,6 @@ A [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (dsh) plug
 
 ```bash
 npx @deepseek-ai/dsh plugin --profile web add smart-compaction
-npx -p smart-compaction smart-compaction-mount-into-presets   # web profile: mount into your presets
 ```
 
 The web profile reloads live, so there's nothing to restart. Details and edge cases under [Install](#install).
@@ -115,44 +114,21 @@ No build step, no restart: the shipped `web` profile reloads live, and the plugi
 **Plugins** right away. Profiles without live reload (`tui`, `headless`, …) pick it up on their next
 start.
 
-**On the shipped `web` profile, also run this once** (why: see below):
-
-```bash
-npx -p smart-compaction smart-compaction-mount-into-presets
-```
-
-**Uninstall:** run the same command with `--remove` first, then
-`npx @deepseek-ai/dsh plugin --profile web remove smart-compaction`.
+**Uninstall:** `npx @deepseek-ai/dsh plugin --profile web remove smart-compaction`.
 
 <details>
 <summary><b>Requirements and preset-isolated profiles</b> (read this if <code>compact_now</code> says no compaction service is configured)</summary>
 
-**`compact_now` requires a `compaction` service reachable from wherever this plugin itself is
-mounted** — it reads `ctx.get('compaction')` at its own mount point, nothing fancier. Most profile
-templates ship one at the host plane and the ordinary bundle install above is enough. But
-`@deepseek-ai/dsh-web-app`-based profiles are different: they disable the host-plane
-`compaction-basic` row and instead have each **preset** mount its own private instance inside an
-isolated cordis realm (`isolate: { compaction: true }`). Isolation in cordis is strictly downward —
-only a plugin mounted as a *descendant of that exact group* can see it (`vendor/cordis/src/service.ts`).
-A plugin on the host plane, including this one installed the ordinary way, is that isolated
-compaction's ancestor, not a descendant, so it can never see it no matter how cleverly it reads the
-service at call time. The only fix is a second, scoped copy of this plugin mounted as a sibling row
-inside that same isolated group — which safely coexists with the host-plane copy (dsh-tools' scoped
-tool registrations shadow the global one in a separate layer, see `ScopedLayers.merge` in
-`packages/core/scope/src/store.ts`).
+**`compact_now` needs a `compaction` service for the calling agent.** Simple profiles mount one on
+the host plane next to this plugin, and the plugin uses it directly. `@deepseek-ai/dsh-web-app`
+profiles (the shipped `web` one) disable that host row; each preset (Standard, PTC, …) mounts its
+own private compaction inside an isolated group instead. For those, the plugin asks the preset
+registry for the calling agent's instance (`agentPresets.serviceFor(agent, 'compaction')`, dsh
+0.2.0-rc.2+). Nothing to mount or edit by hand.
 
-`scripts/mount-into-presets.mjs` (the `smart-compaction-mount-into-presets` command above) does
-that: it scans `$DSH_HOME/.agent-presets/*/agent.cordis.yml` (your local, user-owned preset
-overrides — never a shipped read-only preset under `node_modules`) for any preset that already
-isolates `@deepseek-ai/dsh-compaction-basic`, and inserts a scoped `smart-compaction` row as its
-sibling if one isn't already there. It's idempotent and a no-op (with a one-line log saying so) on
-profiles that don't use presets at all. It is deliberately **not** an install script: installing
-never edits your presets on its own. Re-run it after adding a new preset; `--remove` takes the
-rows out again and leaves each file byte-for-byte as before.
-
-If `compact_now` still errors with `"no compaction service is configured on this profile"` after
-that, your agent's preset genuinely has no `compaction-basic` anywhere in its scope chain — add one
-(see [`docs/subsystems/compaction.md`](https://github.com/deepseek-ai/deepseek-harness/blob/main/docs/subsystems/compaction.md)
+If `compact_now` still errors with `"no compaction service is configured for this agent"`, the
+agent's preset has no `compaction-basic` at all — add one (see
+[`docs/subsystems/compaction.md`](https://github.com/deepseek-ai/deepseek-harness/blob/main/docs/subsystems/compaction.md)
 in the harness repo).
 
 **`context_status` requires `@deepseek-ai/dsh-token-meter` mounted** (it registers the
@@ -249,4 +225,4 @@ model/summarizer-side issue, not something `compact_now` itself controls.
 
 MIT
 
-> **中文简介** · DeepSeek Harness (dsh) 插件：让模型自己决定**何时**压缩上下文，而不是在任务中途被固定的 token 阈值打断。提供 `compact_now`（在安全时机压缩，回合中途也可用）和 `context_status`（对照会话实际的上下文窗口显示真实 token 用量）；某个待办事项完成且上下文已用过半时，也会自动压缩。无需配置，不改动 dsh 核心。<br>安装：`npx @deepseek-ai/dsh plugin --profile web add smart-compaction`，web 配置还需运行一次 `npx -p smart-compaction smart-compaction-mount-into-presets`（web 配置实时加载，无需重启）
+> **中文简介** · DeepSeek Harness (dsh) 插件：让模型自己决定**何时**压缩上下文，而不是在任务中途被固定的 token 阈值打断。提供 `compact_now`（在安全时机压缩，回合中途也可用）和 `context_status`（对照会话实际的上下文窗口显示真实 token 用量）；某个待办事项完成且上下文已用过半时，也会自动压缩。无需配置，不改动 dsh 核心。<br>安装：`npx @deepseek-ai/dsh plugin --profile web add smart-compaction`（web 配置实时加载，无需重启）
