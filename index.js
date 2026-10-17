@@ -17,18 +17,9 @@
 
 import { toolPairingBalancedBefore } from '@deepseek-ai/dsh-compaction'
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { summarizeContextUsage } from './context-status.js'
 import { selectCompactableRange } from './select-range.js'
 import { completedCount, DEFAULT_SAFE_POINT_RATIO, finishedStep, overSafePointRatio } from './safe-point.js'
-
-// dsh 0.2 (session format v4) rejects the old generic `kind: 'plugin'` wrapper:
-// every producer stamps its own kind, like repeat-tool-reminder does.
-const PLUGIN_SOURCE = { kind: 'smart-compaction' }
-const STARTED_NOTICE_TEXT =
-  '⏳ Compacting now — summarizing older history. This runs one extra model '
-  + 'call and can take a while on a local model; the chat will look idle '
-  + 'until it lands.'
 
 export const name = 'tool-compact-now'
 // `compaction` deliberately NOT in `inject`: that would make this plugin's
@@ -59,21 +50,18 @@ const DESCRIPTION =
  * `compact_now` tool and the automatic safe-point trigger.
  * @returns {Promise<{ compacted: false } | { compacted: true, shadowedCount: number, shadowedTokenCount: number }>}
  */
-async function compactAgent(compaction, agent, signal, notice) {
+async function compactAgent(compaction, agent, signal) {
   const session = agent.session
   const range = selectCompactableRange(session, toolPairingBalancedBefore)
   if (range === null) return { compacted: false }
-  // Posted before the slow part (the summarization model call inside
-  // compactRegion, which can run minutes on a local model), not after:
-  // without this, the chat shows nothing until it lands and looks stuck.
-  // `session.append` publishes synchronously to live observers.
-  // An own `kind` + `form: 'notice'` is the same tagging
-  // dsh-compaction-basic and repeat-tool-reminder use for host-generated
-  // asides — collapsed by default, never rendered as if the user typed it.
-  session.append('user/message', createUserMessage({
-    content: [{ type: 'text', text: notice }],
-    source: { ...PLUGIN_SOURCE, form: 'notice', summary: 'Compacting now' },
-  }), { surfaceOp: 'append' })
+  // Deliberately writes nothing to the model-visible surface before the slow
+  // summarization call: an earlier version posted a "Compacting now" notice
+  // here, but `compact_now` runs inside the invoking tool's execute(), where
+  // the assistant `tool_calls` message is still awaiting its `tool` result.
+  // A user/message appended at that moment lands between the two and makes
+  // every later request fail with "Messages with role 'tool' must be a
+  // response to a preceding message with 'tool_calls'". Progress belongs in
+  // the UI, not in model history.
   const result = await compaction.compactRegion(range.start, range.end, agent, signal)
   return {
     compacted: true,
@@ -135,7 +123,7 @@ export function apply(ctx, config = {}) {
         throw new Error('compact_now: no compaction service is configured for this agent')
       }
       try {
-        return await compactAgent(compaction, exec.agent, exec.signal, STARTED_NOTICE_TEXT)
+        return await compactAgent(compaction, exec.agent, exec.signal)
       } catch (error) {
         throw new Error(`compact_now: compaction failed: ${error instanceof Error ? error.message : String(error)}`)
       }
@@ -201,9 +189,7 @@ export function apply(ctx, config = {}) {
     const usage = usageOf(ctx, agent.session)
     if (!overSafePointRatio(usage, ratio)) return next()
     try {
-      await compactAgent(compaction, agent, signal,
-        `⏳ Step finished with ${usage.percentUsed}% of the context used — compacting now, `
-        + 'before the next step. This runs one extra model call and can take a while on a local model.')
+      await compactAgent(compaction, agent, signal)
     } catch (error) {
       // Never break the turn: core's own pressure trigger is still the backstop.
       console.warn(`smart-compaction: safe-point compaction failed: ${error instanceof Error ? error.message : String(error)}`)
