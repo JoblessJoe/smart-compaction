@@ -74,18 +74,37 @@ Two tools, both no-argument.
 
 **Automatic safe-point compaction**
 
-- Watches `todo_write`. When an item flips to `completed`, that's a finished step: a safe place
-  to cut.
-- If usage is past `safePointRatio` (default **0.5**) at that moment, the next step starts on
-  compacted history. Same notice, same `compactRegion()` path as `compact_now`.
-- dsh's own 80% trigger stays as the backstop; this just gets there first, at a clean boundary.
+- Safe points: a `todo_write` item flips to `completed`, or a new turn starts (you just sent a
+  message). Nothing is half-done there.
+- Past `safePointRatio` (default **0.7**) at a safe point, the next step starts on compacted
+  history. Late on purpose: small context windows stay fully used.
+- Models often run 20+ steps with no safe point. So past `hardRatio` (default **0.85**) *any*
+  step boundary compacts. Still between steps — never mid-generation. Keep it below
+  compaction-basic's `thresholdRatio` so this one runs first.
+- Every compaction keeps ~15% of the window as a verbatim recent tail, and caps the summarized
+  span so the summary call itself fits the window. (Compacting everything at 90%+ used to
+  overflow the window → "summarization truncated at the token cap".)
+- dsh's own threshold trigger stays as the backstop.
+
+**Stale-content trimming (no model call)**
+
+- From `trimRatio` (default **0.5**) at safe points, and always right before a compaction, stale
+  tool content becomes a one-line stub:
+  - a `write` (call + result), once that file is rewritten or read in full later;
+  - a `read` result, once that file is read in full again or rewritten;
+  - a `bash` result, once the exact same command ran again.
+- Kept verbatim: every `edit` (the diffs), the latest version of each file, errors, capped/partial reads.
+- Only runs when it frees ~2k+ tokens — each trim resets the provider's prompt cache.
+- Uses core's replace protocol, so trimmed sessions still resume with the plugin uninstalled.
 - A failure here never breaks the turn. It logs a warning and the backstop takes over.
 - Tune or turn it off in your profile's `cordis.patch.yml`:
 
   ```yaml
   - id: tool-compact-now
     config:
-      safePointRatio: 0.6   # or false to disable
+      safePointRatio: 0.7   # or false to disable
+      hardRatio: 0.85       # or false to disable
+      trimRatio: 0.5        # or false to disable
   ```
 
 ## How it works

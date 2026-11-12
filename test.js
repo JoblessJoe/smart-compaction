@@ -7,6 +7,7 @@
 import assert from 'node:assert/strict'
 import { summarizeContextUsage } from './context-status.js'
 import { selectCompactableRange } from './select-range.js'
+import { findStale } from './trim.js'
 import { completedCount, finishedStep, overSafePointRatio } from './safe-point.js'
 
 /**
@@ -147,6 +148,59 @@ async function main() {
     assert.equal(overSafePointRatio({ available: true, percentUsed: 40 }, 0.5), false)
     assert.equal(overSafePointRatio({ available: true, usedTokens: 9 }, 0.5), false, 'unknown window -> no')
     assert.equal(overSafePointRatio({ available: false }, 0.5), false)
+  }
+
+  console.log('13) budget: keeps a recent tail of >= retainTokens...')
+  {
+    // head + 6 nodes of 10 tokens each; keep >= 25 -> last 3 retained
+    const session = makeSession([{ type: 'system/message' }, ...Array(6).fill({ type: 'user/message' })])
+    const range = selectCompactableRange(session, alwaysBalanced, { tokensOf: () => 10, retainTokens: 25 })
+    assert.deepEqual(range, { start: 1, end: 3 })
+  }
+
+  console.log('14) budget: span capped so the summary call fits the window...')
+  {
+    const session = makeSession([{ type: 'system/message' }, ...Array(6).fill({ type: 'user/message' })])
+    const range = selectCompactableRange(session, alwaysBalanced, { tokensOf: () => 10, maxSpanTokens: 20 })
+    assert.deepEqual(range, { start: 1, end: 2 })
+  }
+
+  console.log('15) budget: nothing fits -> null...')
+  {
+    const session = makeSession([{ type: 'system/message' }, ...Array(3).fill({ type: 'user/message' })])
+    assert.equal(selectCompactableRange(session, alwaysBalanced, { tokensOf: () => 10, maxSpanTokens: 5 }), null)
+  }
+
+  console.log('16) trim: superseded write/read/bash stubbed; edits, latest and errors kept...')
+  {
+    const big = 'x\n'.repeat(600)
+    const call = (id, name, args) => ({ type: 'tool-call', id, name, arguments: JSON.stringify(args) })
+    const asst = (seq, ...calls) => ({ seq, type: 'assistant/message', message: { role: 'assistant', content: calls } })
+    const res = (seq, id, text, isError = false) => ({ seq, type: 'tool/result', message: { role: 'tool', toolCallId: id, isError, content: [{ type: 'text', text }] } })
+    const nodes = [
+      asst(1, call('w1', 'write', { file_path: 'a.js', content: big })), res(2, 'w1', 'ok'),
+      asst(3, call('r1', 'read', { file_path: 'b.js' })), res(4, 'r1', big + '(End of file - total 600 lines)'),
+      asst(5, call('b1', 'bash', { command: 'npm test' })), res(6, 'b1', big),
+      asst(7, call('e1', 'edit', { file_path: 'a.js', old_string: big, new_string: big })), res(8, 'e1', 'ok'),
+      asst(9, call('r2', 'read', { file_path: 'a.js' })), res(10, 'r2', big + '(End of file - total 600 lines)'),
+      asst(11, call('w2', 'write', { file_path: 'b.js', content: big })), res(12, 'w2', 'ok'),
+      asst(13, call('b2', 'bash', { command: 'npm test' })), res(14, 'b2', big, true),
+      asst(15, call('r3', 'read', { file_path: 'c.js' })), res(16, 'r3', big + '(Output capped. Showing lines 1-500.)'),
+      asst(17, call('w3', 'write', { file_path: 'c.js', content: big })), res(18, 'w3', 'ok'),
+    ]
+    const { results, writes } = findStale(nodes)
+    assert.deepEqual(results.map(r => r.seq).sort((a, b) => a - b), [4, 6, 16], 'old reads of b.js/c.js (both rewritten later) + first npm test run')
+    assert.deepEqual(writes.map(w => w.seqs), [[1, 2]], 'a.js write+result superseded by full read; edit kept')
+    assert.match(writes[0].text, /a\.js \(601 lines\)/)
+    // a capped read (c.js) never supersedes anything; w3 is latest so it stays.
+
+    // a message mixing a stale write with another call is left alone
+    const mixed = [
+      asst(1, call('w1', 'write', { file_path: 'a.js', content: big }), call('x', 'bash', { command: 'ls' })),
+      res(2, 'w1', 'ok'), res(3, 'x', 'ok'),
+      asst(4, call('w2', 'write', { file_path: 'a.js', content: big })), res(5, 'w2', 'ok'),
+    ]
+    assert.deepEqual(findStale(mixed).writes, [])
   }
 
   console.log('\nall passed.')

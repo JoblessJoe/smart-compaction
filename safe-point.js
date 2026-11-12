@@ -11,7 +11,13 @@
  */
 
 /** Default usage fraction at which a finished todo item triggers compaction. */
-export const DEFAULT_SAFE_POINT_RATIO = 0.5
+export const DEFAULT_SAFE_POINT_RATIO = 0.7
+
+/** Default usage fraction at which any step boundary triggers compaction. */
+export const DEFAULT_HARD_RATIO = 0.85
+
+/** Default usage fraction from which safe points trim stale tool content. */
+export const DEFAULT_TRIM_RATIO = 0.5
 
 /**
  * Number of completed items in a `todo_write` argument list (0 on bad input).
