@@ -230,6 +230,9 @@ export function apply(ctx, config = {}) {
   }
   if (ratio === false && hardRatio === false && trimRatio === false) return
   const lastCompleted = new WeakMap()
+  // After a failed compaction, wait for usage to grow 5 points before trying
+  // again: each attempt is a full summary call (~1 min on a local model).
+  const failedAt = new WeakMap()
   const atSafePoint = new WeakSet()
 
   ctx.on('tools/post-execute', async (exec, _result, next) => {
@@ -259,14 +262,16 @@ export function apply(ctx, config = {}) {
         console.warn(`smart-compaction: trim failed: ${error instanceof Error ? error.message : String(error)}`)
       }
     }
-    if (!due()) return next()
+    if (!due() || usage.percentUsed < (failedAt.get(agent) ?? -Infinity) + 5) return next()
     const compaction = compactionFor(ctx, agent)
     if (!compaction) return next()
     try {
       await compactAgent(ctx, compaction, agent, signal,
         `⏳ ${todoDone ? 'Todo item finished' : step === 1 ? 'New turn' : 'Step finished'} with ${usage.percentUsed}% of the context used — `
         + 'compacting now, before the next step. This runs one extra model call and can take a while on a local model.')
+      failedAt.delete(agent)
     } catch (error) {
+      failedAt.set(agent, usage.percentUsed)
       // Never break the turn: core's own pressure trigger is still the backstop.
       console.warn(`smart-compaction: safe-point compaction failed: ${error instanceof Error ? error.message : String(error)}`)
     }
