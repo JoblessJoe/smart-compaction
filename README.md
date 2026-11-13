@@ -88,6 +88,33 @@ Two tools, both no-argument.
       safePointRatio: 0.6   # or false to disable
   ```
 
+## Compacts too early?
+
+On local models (~128k window or less) dsh's own `compaction-basic` fires at roughly a third of the
+context, and then again every few steps. That is not this plugin: it is core's trigger formula,
+
+```
+trigger = floor(min(W × thresholdRatio, W − O − headroomTokens))
+```
+
+with `headroomTokens` defaulting to **65,536**, sized for DeepSeek's large hosted windows. On a
+128k model `W − O − 65,536` wins, so the trigger lands near 33-45%. After compacting, the retained
+tail (16% of `W − O`) plus the summary sits just under that line, so the next step or two trips it
+again.
+
+Fix: give the preset's `compaction-basic` row a headroom that fits the window (about 5% of `W`).
+Edit it in the web UI's preset editor, or in your preset override:
+
+```yaml
+- id: compaction-basic
+  name: '@deepseek-ai/dsh-compaction-basic'
+  config:
+    headroomTokens: 6144   # ~5% of a 128k window
+    maxTokens: 8192        # summary length cap (defaults to headroomTokens)
+```
+
+The plugin logs a one-time warning with a suggested value when it detects this.
+
 ## How it works
 
 Two entry points exist on dsh's compaction service: `compactNow()` (what the human `/compact`

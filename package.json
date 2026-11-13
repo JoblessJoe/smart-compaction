@@ -60,6 +60,7 @@
     "select-range.js",
     "context-status.js",
     "safe-point.js",
+    "headroom.js",
     "cordis.patch.yml",
     "icon.svg"
   ],

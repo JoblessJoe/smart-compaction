@@ -8,6 +8,7 @@ import assert from 'node:assert/strict'
 import { summarizeContextUsage } from './context-status.js'
 import { selectCompactableRange } from './select-range.js'
 import { completedCount, finishedStep, overSafePointRatio } from './safe-point.js'
+import { corePolicy, headroomCappedTrigger } from './headroom.js'
 
 /**
  * @param {{ type: string }[]} events - event at index i has seq i.
@@ -147,6 +148,28 @@ async function main() {
     assert.equal(overSafePointRatio({ available: true, percentUsed: 40 }, 0.5), false)
     assert.equal(overSafePointRatio({ available: true, usedTokens: 9 }, 0.5), false, 'unknown window -> no')
     assert.equal(overSafePointRatio({ available: false }, 0.5), false)
+  }
+
+  console.log('headroom: default 65k headroom caps the trigger on small windows...')
+  {
+    const defaults = { headroomTokens: 65_536, thresholdRatio: 0.8, modelPolicies: [] }
+    const capped = headroomCappedTrigger(131_072, corePolicy(defaults, undefined))
+    assert.equal(capped.triggerTokens, 65_536)
+    assert.equal(capped.triggerPercent, 50)
+    assert.equal(capped.suggestedHeadroom, 6144)
+    assert.equal(headroomCappedTrigger(1_000_000, defaults), undefined, 'big window: ratio wins')
+    assert.equal(
+      headroomCappedTrigger(131_072, { headroomTokens: 6144, thresholdRatio: 0.8 }),
+      undefined,
+      'fixed headroom: no warning',
+    )
+    const withOverride = {
+      ...defaults,
+      modelPolicies: [{ provider: 'ollama', model: 'qwen', headroomTokens: 4096 }],
+    }
+    assert.equal(corePolicy(withOverride, { provider: 'ollama', model: 'qwen' }).headroomTokens, 4096)
+    assert.equal(corePolicy(withOverride, { provider: 'x', model: 'y' }).headroomTokens, 65_536)
+    assert.equal(corePolicy(undefined, undefined), undefined)
   }
 
   console.log('\nall passed.')

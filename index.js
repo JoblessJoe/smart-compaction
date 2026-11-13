@@ -21,6 +21,7 @@ import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { summarizeContextUsage } from './context-status.js'
 import { selectCompactableRange } from './select-range.js'
 import { completedCount, DEFAULT_SAFE_POINT_RATIO, finishedStep, overSafePointRatio } from './safe-point.js'
+import { corePolicy, headroomCappedTrigger } from './headroom.js'
 
 // dsh 0.2 (session format v4) rejects the old generic `kind: 'plugin'` wrapper:
 // every producer stamps its own kind, like repeat-tool-reminder does.
@@ -170,6 +171,39 @@ export function apply(ctx, config = {}) {
       return summarizeContextUsage(state)
     },
   }))
+
+  // --- early-trigger diagnosis (see headroom.js) -------------------------
+  // compaction-basic's default 65,536-token headroom makes it fire at ~30-45%
+  // on 128k-class local models. Warn once per service + window with the fix.
+  const warnedHeadroom = new WeakMap()
+  ctx.on('agent/pre-step', async ({ agent }, next) => {
+    try {
+      const compaction = compactionFor(ctx, agent)
+      const state = ctx.get('sessionProjections')?.stateOf(agent.session, 'contextPressure')
+      const contextWindow = state?.contextWindow
+      if (compaction && contextWindow) {
+        const seen = warnedHeadroom.get(compaction) ?? new Set()
+        if (!seen.has(contextWindow)) {
+          seen.add(contextWindow)
+          warnedHeadroom.set(compaction, seen)
+          const target = agent.session.requestHeader?.()?.config
+          const policy = corePolicy(compaction.config, target)
+          const capped = policy && headroomCappedTrigger(contextWindow, policy)
+          if (capped) {
+            const msg = `smart-compaction: compaction-basic will auto-compact at <=${capped.triggerPercent}% `
+              + `(~${capped.triggerTokens} tokens) of this model's ${contextWindow}-token window, not `
+              + `${policy.thresholdRatio * 100}%: its headroomTokens (${policy.headroomTokens}) is sized for `
+              + `large hosted windows. Set headroomTokens: ${capped.suggestedHeadroom} on the preset's `
+              + 'compaction-basic row (see README "Compacts too early?").'
+            ;(ctx.logger?.warn ?? console.warn).call(ctx.logger ?? console, msg)
+          }
+        }
+      }
+    } catch {
+      // Diagnosis only: never let it break a turn.
+    }
+    return next()
+  })
 
   // --- automatic safe-point compaction (see safe-point.js) ---------------
   // Local models rarely call compact_now on their own, so the plugin also
