@@ -23,7 +23,9 @@ import { selectCompactableRange } from './select-range.js'
 import { completedCount, DEFAULT_SAFE_POINT_RATIO, finishedStep, overSafePointRatio } from './safe-point.js'
 import { corePolicy, headroomCappedTrigger } from './headroom.js'
 import { DEFAULT_SUMMARY_MAX_TOKENS, tunedConfig } from './engine-tune.js'
-import { MASK_DEFAULTS, maskResults, staleToolResults } from './mask.js'
+import { isMasked, MASK_DEFAULTS, maskResults, staleToolResults } from './mask.js'
+import { capReadText, supersededReads } from './reads.js'
+import { describeAssembly, trimAssembly } from './prompt-trim.js'
 import { recallToolOutput } from './recall.js'
 
 // dsh 0.2 (session format v4) rejects the old generic `kind: 'plugin'` wrapper:
@@ -128,12 +130,19 @@ function usageOf(ctx, session) {
  *   safePointRatio?: number | false,
  *   summaryMaxTokens?: number | false,
  *   mask?: false | Partial<typeof MASK_DEFAULTS>,
+ *   maxOutputTokens?: number | false,
+ *   readMaxChars?: number | false,
+ *   prompt?: object,
  * }} [config]
  *   - `safePointRatio`: usage fraction (0-1) at which finishing a todo item
  *     compacts automatically; `false` turns it off. Default 0.6.
  *   - `summaryMaxTokens`: headroom and summary cap forced onto the live
  *     compaction-basic engine; `false` leaves the engine alone. Default 16384.
- *   - `mask`: batched masking of stale tool output; `false` turns it off.
+ *   - `mask`: batched masking of stale tool output and outdated file reads;
+ *     `false` turns it off.
+ *   - `maxOutputTokens`: cap on each request's reply reserve; `false` = off. Default 16384.
+ *   - `readMaxChars`: cap on one `read` result; `false` = off. Default 20000.
+ *   - `prompt`: `{ report, dropSections, sections, maxSectionChars, maxContextChars }`.
  */
 export function apply(ctx, config = {}) {
   ctx.tools.register(defineTool({
@@ -240,6 +249,15 @@ export function apply(ctx, config = {}) {
     throw new Error(`smart-compaction: summaryMaxTokens must be a positive integer, or false (got ${summaryMaxTokens})`)
   }
   const mask = config.mask === false ? false : { ...MASK_DEFAULTS, ...(config.mask ?? {}) }
+  const maxOutputTokens = config.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS
+  if (maxOutputTokens !== false && !(Number.isInteger(maxOutputTokens) && maxOutputTokens > 0)) {
+    throw new Error(`smart-compaction: maxOutputTokens must be a positive integer, or false (got ${maxOutputTokens})`)
+  }
+  const readMaxChars = config.readMaxChars ?? DEFAULT_READ_MAX_CHARS
+  if (readMaxChars !== false && !(Number.isInteger(readMaxChars) && readMaxChars >= 1000)) {
+    throw new Error(`smart-compaction: readMaxChars must be an integer >= 1000, or false (got ${readMaxChars})`)
+  }
+  const prompt = { report: true, ...(config.prompt ?? {}) }
   const warn = msg => (ctx.logger?.warn ?? console.warn).call(ctx.logger ?? console, msg)
   const info = msg => (ctx.logger?.info ?? console.log).call(ctx.logger ?? console, msg)
 
@@ -283,7 +301,14 @@ export function apply(ctx, config = {}) {
     const meter = ctx.get('tokenMeter')
     if (typeof meter?.estimateMessage !== 'function') return { masked: 0, tokensSaved: 0 }
     const session = agent.session
-    const candidates = staleToolResults(session, mask)
+    const stale = staleToolResults(session, mask)
+    const outdated = mask.dedupeReads === false
+      ? []
+      : supersededReads(session, { minChars: mask.dedupeMinChars, isMasked })
+    // An outdated read gets the clearer "outdated" marker even if it is also old.
+    const bySeq = new Map(stale.map(c => [c.seq, c]))
+    for (const c of outdated) bySeq.set(c.seq, c)
+    const candidates = [...bySeq.values()].sort((a, b) => a.seq - b.seq)
     if (candidates.length === 0) return { masked: 0, tokensSaved: 0 }
     if (!force) {
       const staleTokens = candidates.reduce((sum, c) => sum + meter.estimateMessage(c.message), 0)
@@ -301,7 +326,65 @@ export function apply(ctx, config = {}) {
     return result
   }
 
-  // --- 4. safe-point compaction (see safe-point.js) ----------------------
+  // --- 4. reply reserve ---------------------------------------------------
+  // Every request reserves `maxTokens` for the reply, and compaction-basic
+  // subtracts that same reserve from its trigger. dsh's DeepSeek adapter
+  // defaults it to 256,000 — more than a local window. Cap it, never raising
+  // a lower value the request or the adapter's model entry already has.
+  if (maxOutputTokens !== false) {
+    ctx.on('agent/request', async (payload, next) => {
+      const proposed = await next()
+      try {
+        let cap = maxOutputTokens
+        if (proposed.maxTokens === undefined) {
+          const info = await ctx.get('llm')?.resolveModelInfo?.(proposed.provider, proposed.model, payload.signal)
+          if (typeof info?.defaultMaxTokens === 'number') cap = Math.min(cap, info.defaultMaxTokens)
+        } else {
+          cap = Math.min(cap, proposed.maxTokens)
+        }
+        return cap === proposed.maxTokens ? proposed : { ...proposed, maxTokens: cap }
+      } catch {
+        return proposed
+      }
+    })
+  }
+
+  // --- 5. read cap (see reads.js) -----------------------------------------
+  if (readMaxChars !== false) {
+    ctx.on('tools/post-execute', async (exec, result, next) => {
+      const decision = await next()
+      if (exec.name !== 'read' || result.isError || decision?.kind !== 'accept' || decision.value !== undefined) {
+        return decision
+      }
+      const content = decision.content ?? result.content
+      const text = content.filter(b => b?.type === 'text').map(b => b.text).join('\n')
+      const capped = capReadText(text, readMaxChars)
+      if (capped === undefined) return decision
+      return { ...decision, content: [{ type: 'text', text: capped }, ...content.filter(b => b?.type !== 'text')] }
+    })
+  }
+
+  // --- 6. system prompt (see prompt-trim.js) -----------------------------
+  // Nothing is cut unless configured; the size report (once per distinct
+  // layout) shows which section names are worth trimming.
+  const reported = new Set()
+  ctx.on('system-prompt/assemble', async (assembly, context, next) => {
+    const out = await next()
+    try {
+      if (prompt.report !== false) {
+        const line = describeAssembly(out)
+        if (!reported.has(line)) {
+          reported.add(line)
+          info(`smart-compaction: system prompt ${line}`)
+        }
+      }
+      return trimAssembly(out, prompt)
+    } catch {
+      return out
+    }
+  })
+
+  // --- 7. safe-point compaction (see safe-point.js) ----------------------
   // A todo item flipping to completed marks a clean boundary. Past
   // `safePointRatio`, mask stale output first; summarize only if that was
   // not enough. Core's own trigger stays the backstop.
@@ -352,6 +435,11 @@ export function apply(ctx, config = {}) {
     return next()
   }, { prepend: true })
 }
+
+/** Reply reserve per request. Room for reasoning plus a large edit, far below 256k. */
+const DEFAULT_MAX_OUTPUT_TOKENS = 16_384
+/** Read cap in characters (~5k tokens), vs dsh's own 51,200 bytes. */
+const DEFAULT_READ_MAX_CHARS = 20_000
 
 const RECALL_DESCRIPTION =
   'Get back the full original text of an older tool output that was hidden to save context. '

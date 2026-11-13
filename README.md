@@ -16,6 +16,8 @@ A [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (dsh) plug
 - **`context_status`:** real token usage against the session's actual context window, so the model stops guessing.
 - **Automatic safe-point compaction:** local models rarely call a tool like this on their own, so the plugin also compacts by itself the moment a todo item is marked done and the context is over 60% full. No model decision needed.
 - **Hides old tool output, keeps it recallable:** big tool results more than 4 steps old shrink to a short preview, in batches. `recall_output` brings any of them back word for word. No model call.
+- **Hides outdated file reads:** once a file is read again or rewritten, older copies are hidden, so the model doesn't work from code that is no longer there.
+- **Smaller reply reserve and file reads:** caps the reply reserve at 16k tokens (dsh's DeepSeek adapter defaults to 256k) and one `read` at 20,000 characters, with an `offset` hint to read on.
 - **Fixes the early trigger:** dsh's own compaction fires at ~33-45% on 128k local models. The plugin shrinks its reserve so it fires near 80% again.
 - **No core changes:** built only on dsh's public compaction APIs.
 
@@ -103,6 +105,34 @@ context, and hiding old output works about as well as a summary at half the cost
   of old history makes a local model re-read the prompt from there.
 - Uses dsh's own prune protocol (the one `tool-result-pruner` uses), so the token meter stays exact
   and the original stays in the session log.
+
+**Outdated file reads**
+
+- A `read` result is outdated once a later read covers the same lines, or a later `write` replaced
+  the file. It becomes a one-line marker naming the file and lines; the newer copy stays.
+- Hidden in the same batch as stale output (same cache-friendly rule).
+
+**Reply reserve** (`maxOutputTokens`, default 16,384)
+
+- Every request keeps room free for the model's reply, and dsh's compaction trigger subtracts that
+  same room. dsh's DeepSeek adapter reserves 256,000 by default. The plugin caps it per request and
+  never raises a lower value you already set.
+
+**Read cap** (`readMaxChars`, default 20,000)
+
+- dsh's `read` returns up to 51,200 bytes (~13k tokens). The plugin cuts longer results at a line
+  boundary and ends them with `Use offset=N to continue.`, so nothing is lost: the file is on disk.
+
+**System prompt** (`prompt`, nothing cut by default)
+
+- Logs each prompt section's and context's size once, so you can see what costs room.
+- `dropSections`, `sections` (replacement text), `maxSectionChars` and `maxContextChars` (e.g.
+  AGENTS.md) trim them. A cut always says what was cut.
+- Tool *schemas* belong to dsh and can't be edited by a plugin. Remove whole tools in the web
+  preset editor instead.
+
+**Not handled: file contents inside old `write`/`edit` calls.** Hiding those means rewriting the
+model's own messages, which dsh guards closely. Not done without testing on a real dsh.
 
 **`recall_output`** (idea from `dsh-compaction-vcc`'s `recall`)
 
@@ -239,6 +269,13 @@ All optional, in your profile's `cordis.patch.yml`:
       minChars: 2000           # smaller results are left alone
       previewChars: 300        # preview kept in the mask
       batchRatio: 0.1          # hide in one batch once stale output is this share of the window
+      dedupeReads: true        # also hide outdated file reads
+    maxOutputTokens: 16384     # reply reserve per request; false = leave as is
+    readMaxChars: 20000        # cap one read result; false = dsh's own 51,200 bytes
+    prompt:                    # nothing is cut unless set
+      report: true             # log section/context sizes once
+      dropSections: []         # section names to remove
+      maxContextChars: 8000    # e.g. cap AGENTS.md
 ```
 
 ## Status

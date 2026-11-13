@@ -10,7 +10,9 @@ import { selectCompactableRange } from './select-range.js'
 import { completedCount, finishedStep, overSafePointRatio } from './safe-point.js'
 import { corePolicy, headroomCappedTrigger } from './headroom.js'
 import { tunedConfig } from './engine-tune.js'
-import { MASK_TAG, maskResults, staleToolResults } from './mask.js'
+import { isMasked, MASK_TAG, maskResults, staleToolResults } from './mask.js'
+import { capReadText, readRange, supersededReads } from './reads.js'
+import { trimAssembly } from './prompt-trim.js'
 import { originalToolResult, recallToolOutput } from './recall.js'
 
 /**
@@ -276,6 +278,61 @@ async function main() {
     assert.equal(recallToolOutput(session, '1').text, big)
     assert.equal(recallToolOutput(session, 'nope').found, false)
     assert.equal(recallToolOutput(session, '0').found, false, 'system message is not a tool result')
+  }
+
+  console.log('reads: range parse and line-boundary cap...')
+  {
+    const text = Array.from({ length: 100 }, (_, i) => `${i + 1}: ${'a'.repeat(50)}`).join('\n')
+      + '\n\n(End of file - total 100 lines)'
+    assert.deepEqual(readRange(text), { first: 1, last: 100 })
+    const capped = capReadText(text, 1000)
+    assert.ok(capped.length < 1200)
+    const range = readRange(capped)
+    assert.equal(range.first, 1)
+    assert.ok(capped.endsWith(`Use offset=${range.last + 1} to continue.)`))
+    assert.ok(!capped.includes('End of file'), 'stale dsh footer dropped')
+    assert.equal(capReadText(text, 100_000), undefined, 'fits: untouched')
+  }
+
+  console.log('reads: outdated copies found, newest kept...')
+  {
+    const lines = (from, to) => Array.from({ length: to - from + 1 }, (_, i) => `${from + i}: ${'b'.repeat(40)}`).join('\n')
+    const call = (id, name, args) => ({ type: 'tool-call', id, name, arguments: JSON.stringify(args) })
+    const assistant = (...calls) => ({ type: 'assistant/message', data: { message: { role: 'assistant', content: calls } } })
+    const result = (id, text) => ({ type: 'tool/result', data: { message: { role: 'tool', toolCallId: id, content: [{ type: 'text', text }] } } })
+    const session = makeLiveSession([
+      { type: 'system/message' },
+      assistant(call('c1', 'read', { file_path: 'a.js' })), result('c1', lines(1, 50)), // seq 1,2: covered by c3
+      assistant(call('c2', 'read', { file_path: 'b.js' })), result('c2', lines(1, 50)), // seq 3,4: rewritten by c4
+      assistant(call('c3', 'read', { file_path: 'a.js' })), result('c3', lines(1, 80)), // seq 5,6: newest a.js
+      assistant(call('c4', 'write', { file_path: 'b.js', content: 'x' })), result('c4', 'Updated file'),
+      assistant(call('c5', 'read', { file_path: 'a.js', offset: 60 })), result('c5', lines(60, 80)), // partial: keeps c3
+    ])
+    const found = supersededReads(session, { minChars: 100, isMasked })
+    assert.deepEqual(found.map(f => [f.seq, f.reason]), [[2, 'reread'], [4, 'rewritten']])
+
+    maskResults(session, found, { previewChars: 300, estimate: m => JSON.stringify(m).length, freeze: m => m })
+    const hidden = session.eventAt(session.surface.nodes[2]).data.message.content[0].text
+    assert.ok(hidden.startsWith('[smart-compaction: old read of a.js lines 1-50 hidden'))
+    assert.ok(isMasked([{ type: 'text', text: hidden }]))
+    assert.deepEqual(supersededReads(session, { minChars: 100, isMasked }), [], 'not hidden twice')
+    assert.equal(recallToolOutput(session, session.surface.nodes[2]).text, lines(1, 50))
+  }
+
+  console.log('prompt-trim: drop, replace, cut with a visible note...')
+  {
+    const assembly = {
+      sections: [{ name: 'persona', text: 'p' }, { name: 'tool-bash', text: 'x'.repeat(500) }, { name: 'plan', text: 'q' }],
+      contexts: [{ name: 'agents-md', text: 'y'.repeat(1000) }],
+      variables: {},
+    }
+    const out = trimAssembly(assembly, { dropSections: ['plan'], sections: { persona: 'P' }, maxContextChars: 100 })
+    assert.deepEqual(out.sections.map(s => s.name), ['persona', 'tool-bash'])
+    assert.equal(out.sections[0].text, 'P')
+    assert.equal(out.sections[1].text.length, 500, 'no section cap set')
+    assert.ok(out.contexts[0].text.includes('900 more characters not shown'))
+    assert.equal(assembly.sections.length, 3, 'input untouched')
+    assert.deepEqual(trimAssembly(assembly, {}).sections, assembly.sections, 'default: nothing cut')
   }
 
   console.log('\nall passed.')

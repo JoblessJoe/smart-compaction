@@ -18,8 +18,10 @@
  * test.js can drive them without a running harness.
  */
 
-/** Opening of every mask marker; also how an already-masked result is recognised. */
+/** Opening of the stale-output marker. */
 export const MASK_TAG = '[smart-compaction: older tool output hidden'
+/** Present in every marker this plugin writes; how a hidden result is recognised. */
+export const RECALL_HINT = 'Call recall_output with id "'
 
 export const MASK_DEFAULTS = Object.freeze({
   /** A result is stale once this many later model steps exist. */
@@ -30,6 +32,10 @@ export const MASK_DEFAULTS = Object.freeze({
   previewChars: 300,
   /** Mask in one batch once stale output adds up to this share of the window. */
   batchRatio: 0.1,
+  /** Also hide file reads made outdated by a later read or write of the same file. */
+  dedupeReads: true,
+  /** Outdated reads smaller than this are left alone. */
+  dedupeMinChars: 500,
 })
 
 /** Text characters across a tool result's content blocks. */
@@ -41,9 +47,26 @@ export function textChars(blocks) {
   return chars
 }
 
-/** Whether a tool result's content already carries our mask. */
+/** Whether a tool result's content already carries one of our markers. */
 export function isMasked(blocks) {
-  return (blocks ?? []).some(b => b?.type === 'text' && typeof b.text === 'string' && b.text.includes(MASK_TAG))
+  return (blocks ?? []).some(b => b?.type === 'text' && typeof b.text === 'string'
+    && /\[smart-compaction: [^\]]*Call recall_output with id "\d+"/.test(b.text))
+}
+
+/** The stale-output marker for the result at `seq`. */
+export function staleMarker(text, seq) {
+  return `${MASK_TAG} to save context (${text.length.toLocaleString('en-US')} chars). `
+    + `${RECALL_HINT}${seq}" to get the full original back.]`
+}
+
+/** The marker for an outdated file read at `seq`. */
+export function outdatedReadMarker({ path, range, reason }, seq) {
+  const lines = range ? ` lines ${range.first}-${range.last}` : ''
+  const why = reason === 'rewritten'
+    ? 'the file was rewritten later, so this copy is outdated'
+    : 'a newer read of the same lines comes later'
+  return `[smart-compaction: old read of ${path}${lines} hidden: ${why}. `
+    + `${RECALL_HINT}${seq}" only if you need this exact old copy.]`
 }
 
 /**
@@ -81,12 +104,12 @@ export function staleToolResults(session, { afterSteps, minChars }) {
  * @param {any[]} blocks - original tool-result content.
  * @param {number} seq - seq of the node being masked; recall walks back from it.
  * @param {number} previewChars
+ * @param {(text: string, seq: number) => string} [markerFor]
  */
-export function maskedContent(blocks, seq, previewChars) {
+export function maskedContent(blocks, seq, previewChars, markerFor = staleMarker) {
   const text = blocks.filter(b => b?.type === 'text').map(b => b.text).join('\n')
   const head = text.slice(0, previewChars).trimEnd()
-  const marker = `${MASK_TAG} to save context (${text.length.toLocaleString('en-US')} chars). `
-    + `Call recall_output with id "${seq}" to get the full original back.]`
+  const marker = markerFor(text, seq)
   const out = []
   let placed = false
   for (const block of blocks) {
@@ -104,15 +127,21 @@ export function maskedContent(blocks, seq, previewChars) {
 /**
  * Mask `candidates` in place through dsh's prune protocol.
  * @param {any} session - live dsh session (`append`).
- * @param {{ seq: number, event: any, message: any }[]} candidates
+ * @param {{ seq: number, event: any, message: any, reason?: string }[]} candidates - a `reason`
+ *   marks an outdated file read (reads.js): no preview, a different marker.
  * @param {{ previewChars: number, estimate: (message: any) => number, freeze: (message: any) => any }} deps
  * @returns {{ masked: number, tokensSaved: number }}
  */
 export function maskResults(session, candidates, { previewChars, estimate, freeze }) {
   let masked = 0
   let tokensSaved = 0
-  for (const { seq, event, message } of candidates) {
-    const replacement = freeze({ ...message, content: maskedContent(message.content, seq, previewChars) })
+  for (const candidate of candidates) {
+    const { seq, event, message } = candidate
+    const markerFor = candidate.reason === undefined
+      ? staleMarker
+      : (_text, at) => outdatedReadMarker(candidate, at)
+    const preview = candidate.reason === undefined ? previewChars : 0
+    const replacement = freeze({ ...message, content: maskedContent(message.content, seq, preview, markerFor) })
     const before = estimate(message)
     const after = estimate(replacement)
     if (after >= before) continue

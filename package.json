@@ -65,6 +65,8 @@
     "engine-tune.js",
     "mask.js",
     "recall.js",
+    "reads.js",
+    "prompt-trim.js",
     "cordis.patch.yml",
     "icon.svg"
   ],
