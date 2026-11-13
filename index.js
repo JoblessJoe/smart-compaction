@@ -103,7 +103,7 @@ function usageOf(ctx, session) {
  * @param {import('@deepseek-ai/cordis').Context} ctx
  * @param {{ safePointRatio?: number | false }} [config] - `safePointRatio`:
  *   usage fraction (0-1) at which finishing a todo item compacts
- *   automatically; `false` turns the automatic trigger off. Default 0.5.
+ *   automatically; `false` turns the automatic trigger off. Default 0.6.
  */
 export function apply(ctx, config = {}) {
   ctx.tools.register(defineTool({

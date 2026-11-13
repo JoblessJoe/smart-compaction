@@ -14,7 +14,7 @@ A [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (dsh) plug
 
 - **`compact_now`:** compacts at a point the model knows is safe, e.g. right after finishing a todo. Works mid-turn.
 - **`context_status`:** real token usage against the session's actual context window, so the model stops guessing.
-- **Automatic safe-point compaction:** local models rarely call a tool like this on their own, so the plugin also compacts by itself the moment a todo item is marked done and the context is over half full. No model decision needed.
+- **Automatic safe-point compaction:** local models rarely call a tool like this on their own, so the plugin also compacts by itself the moment a todo item is marked done and the context is over 60% full. No model decision needed.
 - **No config, no core changes:** built only on dsh's public compaction APIs.
 
 ```bash
@@ -76,7 +76,7 @@ Two tools, both no-argument.
 
 - Watches `todo_write`. When an item flips to `completed`, that's a finished step: a safe place
   to cut.
-- If usage is past `safePointRatio` (default **0.5**) at that moment, the next step starts on
+- If usage is past `safePointRatio` (default **0.6**) at that moment, the next step starts on
   compacted history. Same notice, same `compactRegion()` path as `compact_now`.
 - dsh's own 80% trigger stays as the backstop; this just gets there first, at a clean boundary.
 - A failure here never breaks the turn. It logs a warning and the backstop takes over.
