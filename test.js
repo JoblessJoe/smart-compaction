@@ -9,6 +9,40 @@ import { summarizeContextUsage } from './context-status.js'
 import { selectCompactableRange } from './select-range.js'
 import { completedCount, finishedStep, overSafePointRatio } from './safe-point.js'
 import { corePolicy, headroomCappedTrigger } from './headroom.js'
+import { tunedConfig } from './engine-tune.js'
+import { MASK_TAG, maskResults, staleToolResults } from './mask.js'
+import { originalToolResult, recallToolOutput } from './recall.js'
+
+/**
+ * A tiny append-only session double: events by seq, a surface of seqs, and
+ * `append` honouring `surfaceOp: replace` the way dsh does.
+ */
+function makeLiveSession(specs) {
+  const events = []
+  const surface = { nodes: [] }
+  const push = (type, data, opts = {}) => {
+    const event = { seq: events.length, type, data, ...(opts.sourceEventSeqs ? { sourceEventSeqs: opts.sourceEventSeqs } : {}) }
+    events.push(event)
+    const op = opts.surfaceOp
+    if (op && op.op === 'replace') {
+      const i = surface.nodes.indexOf(op.startSeq)
+      surface.nodes.splice(i, 1, event.seq)
+    } else if (type !== 'compaction/prune') {
+      surface.nodes.push(event.seq)
+    }
+    return event
+  }
+  for (const spec of specs) push(spec.type, spec.data ?? {})
+  return {
+    surface,
+    events,
+    eventAt: seq => events[seq],
+    deriveEventMessage: event => event.data.message,
+    append: push,
+  }
+}
+const toolResult = text => ({ type: 'tool/result', data: { message: { role: 'tool', content: [{ type: 'text', text }] } } })
+const step = { type: 'assistant/message', data: { message: { role: 'assistant', content: [] } } }
 
 /**
  * @param {{ type: string }[]} events - event at index i has seq i.
@@ -170,6 +204,78 @@ async function main() {
     assert.equal(corePolicy(withOverride, { provider: 'ollama', model: 'qwen' }).headroomTokens, 4096)
     assert.equal(corePolicy(withOverride, { provider: 'x', model: 'y' }).headroomTokens, 65_536)
     assert.equal(corePolicy(undefined, undefined), undefined)
+  }
+
+  console.log('select-range: retained tail...')
+  {
+    const session = makeSession([
+      { type: 'system/message' }, { type: 'user/message' }, { type: 'user/message' },
+      { type: 'user/message' }, { type: 'user/message' },
+    ])
+    const nodes = [0, 1, 2, 3, 4].map(seq => ({ seq, tokens: 100 }))
+    assert.deepEqual(
+      selectCompactableRange(session, alwaysBalanced, { nodes, retainTokens: 200 }),
+      { start: 1, end: 2 },
+      'keeps the newest 200 tokens (two nodes)',
+    )
+    assert.equal(
+      selectCompactableRange(session, alwaysBalanced, { nodes, retainTokens: 10_000 }),
+      null,
+      'everything fits the tail: nothing to compact',
+    )
+    assert.deepEqual(
+      selectCompactableRange(session, alwaysBalanced, { nodes: nodes.slice(1), retainTokens: 200 }),
+      { start: 1, end: 3 },
+      'mismatched pricing falls back to keep-last-node',
+    )
+  }
+
+  console.log('engine-tune: shrink headroom + summary cap, keep lower user values...')
+  {
+    const stock = { headroomTokens: 65_536, maxTokens: 65_536, thresholdRatio: 0.8 }
+    assert.deepEqual(tunedConfig(stock, 16_384), { headroomTokens: 16_384, maxTokens: 16_384, thresholdRatio: 0.8 })
+    assert.equal(tunedConfig({ headroomTokens: 4096, maxTokens: 8192 }, 16_384), undefined, 'already lower: untouched')
+    assert.equal(tunedConfig(tunedConfig(stock, 16_384), 16_384), undefined, 'idempotent')
+    assert.equal(tunedConfig(undefined, 16_384), undefined)
+  }
+
+  console.log('mask: only old, big, unmasked results; batched; recall restores...')
+  {
+    const big = 'x'.repeat(5000)
+    const session = makeLiveSession([
+      { type: 'system/message' },
+      toolResult(big), // seq 1: 5 steps old
+      toolResult('small'), // seq 2: too small
+      step, step, step, step,
+      toolResult(big), // seq 7: 1 step old
+      step,
+    ])
+    const options = { afterSteps: 4, minChars: 2000 }
+    const stale = staleToolResults(session, options)
+    assert.deepEqual(stale.map(c => c.seq), [1])
+
+    const result = maskResults(session, stale, {
+      previewChars: 100,
+      estimate: m => Math.ceil(m.content.map(b => b.text ?? '').join('').length / 4),
+      freeze: m => m,
+    })
+    assert.equal(result.masked, 1)
+    assert.ok(result.tokensSaved > 1000)
+    const replacedSeq = session.surface.nodes[1]
+    assert.notEqual(replacedSeq, 1, 'surface now points at the replacement')
+    const masked = session.eventAt(replacedSeq).data.message.content[0].text
+    assert.ok(masked.includes(MASK_TAG) && masked.includes('id "1"'))
+    assert.ok(masked.length < 600)
+    assert.equal(session.events[replacedSeq - 1].type, 'compaction/prune', 'shadow price lands right before')
+    assert.deepEqual(staleToolResults(session, options), [], 'already masked: not again')
+
+    assert.equal(originalToolResult(session, replacedSeq).seq, 1, 'walks back to the original')
+    const recalled = recallToolOutput(session, `seq ${replacedSeq}`)
+    assert.equal(recalled.found, true)
+    assert.equal(recalled.text, big)
+    assert.equal(recallToolOutput(session, '1').text, big)
+    assert.equal(recallToolOutput(session, 'nope').found, false)
+    assert.equal(recallToolOutput(session, '0').found, false, 'system message is not a tool result')
   }
 
   console.log('\nall passed.')

@@ -17,11 +17,14 @@
 
 import { toolPairingBalancedBefore } from '@deepseek-ai/dsh-compaction'
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import { createUserMessage } from '@deepseek-ai/dsh-llm'
+import { createUserMessage, freezeMessage } from '@deepseek-ai/dsh-llm'
 import { summarizeContextUsage } from './context-status.js'
 import { selectCompactableRange } from './select-range.js'
 import { completedCount, DEFAULT_SAFE_POINT_RATIO, finishedStep, overSafePointRatio } from './safe-point.js'
 import { corePolicy, headroomCappedTrigger } from './headroom.js'
+import { DEFAULT_SUMMARY_MAX_TOKENS, tunedConfig } from './engine-tune.js'
+import { MASK_DEFAULTS, maskResults, staleToolResults } from './mask.js'
+import { recallToolOutput } from './recall.js'
 
 // dsh 0.2 (session format v4) rejects the old generic `kind: 'plugin'` wrapper:
 // every producer stamps its own kind, like repeat-tool-reminder does.
@@ -60,9 +63,9 @@ const DESCRIPTION =
  * `compact_now` tool and the automatic safe-point trigger.
  * @returns {Promise<{ compacted: false } | { compacted: true, shadowedCount: number, shadowedTokenCount: number }>}
  */
-async function compactAgent(compaction, agent, signal, notice) {
+async function compactAgent(ctx, compaction, agent, signal, notice) {
   const session = agent.session
-  const range = selectCompactableRange(session, toolPairingBalancedBefore)
+  const range = selectCompactableRange(session, toolPairingBalancedBefore, retainFor(ctx, compaction, session))
   if (range === null) return { compacted: false }
   // Posted before the slow part (the summarization model call inside
   // compactRegion, which can run minutes on a local model), not after:
@@ -92,6 +95,26 @@ function compactionFor(ctx, agent) {
   return ctx.get('compaction') ?? ctx.get('agentPresets')?.serviceFor(agent, 'compaction')
 }
 
+/**
+ * Verbatim tail to keep when compacting: the engine's own `retainRatio` (core
+ * default 0.16) of the window, priced by the token meter, like core's own
+ * selection. Empty (= keep only the last node) when anything is unknown.
+ */
+function retainFor(ctx, compaction, session) {
+  try {
+    const meter = ctx.get('tokenMeter')
+    const window = ctx.get('sessionProjections')?.stateOf(session, 'contextPressure')?.contextWindow
+    if (!meter || !window) return {}
+    const ratio = typeof compaction?.config?.retainRatio === 'number' ? compaction.config.retainRatio : 0.16
+    const retainTokens = typeof compaction?.config?.retainTokens === 'number'
+      ? compaction.config.retainTokens
+      : Math.floor(window * ratio)
+    return { nodes: meter.measure(session).nodes, retainTokens }
+  } catch {
+    return {}
+  }
+}
+
 /** Current usage for `session`, via token-meter's contextPressure projection. */
 function usageOf(ctx, session) {
   const projections = ctx.get('sessionProjections')
@@ -101,9 +124,16 @@ function usageOf(ctx, session) {
 
 /**
  * @param {import('@deepseek-ai/cordis').Context} ctx
- * @param {{ safePointRatio?: number | false }} [config] - `safePointRatio`:
- *   usage fraction (0-1) at which finishing a todo item compacts
- *   automatically; `false` turns the automatic trigger off. Default 0.6.
+ * @param {{
+ *   safePointRatio?: number | false,
+ *   summaryMaxTokens?: number | false,
+ *   mask?: false | Partial<typeof MASK_DEFAULTS>,
+ * }} [config]
+ *   - `safePointRatio`: usage fraction (0-1) at which finishing a todo item
+ *     compacts automatically; `false` turns it off. Default 0.6.
+ *   - `summaryMaxTokens`: headroom and summary cap forced onto the live
+ *     compaction-basic engine; `false` leaves the engine alone. Default 16384.
+ *   - `mask`: batched masking of stale tool output; `false` turns it off.
  */
 export function apply(ctx, config = {}) {
   ctx.tools.register(defineTool({
@@ -136,7 +166,7 @@ export function apply(ctx, config = {}) {
         throw new Error('compact_now: no compaction service is configured for this agent')
       }
       try {
-        return await compactAgent(compaction, exec.agent, exec.signal, STARTED_NOTICE_TEXT)
+        return await compactAgent(ctx, compaction, exec.agent, exec.signal, STARTED_NOTICE_TEXT)
       } catch (error) {
         throw new Error(`compact_now: compaction failed: ${error instanceof Error ? error.message : String(error)}`)
       }
@@ -172,49 +202,109 @@ export function apply(ctx, config = {}) {
     },
   }))
 
-  // --- early-trigger diagnosis (see headroom.js) -------------------------
-  // compaction-basic's default 65,536-token headroom makes it fire at ~30-45%
-  // on 128k-class local models. Warn once per service + window with the fix.
-  const warnedHeadroom = new WeakMap()
-  ctx.on('agent/pre-step', async ({ agent }, next) => {
-    try {
-      const compaction = compactionFor(ctx, agent)
-      const state = ctx.get('sessionProjections')?.stateOf(agent.session, 'contextPressure')
-      const contextWindow = state?.contextWindow
-      if (compaction && contextWindow) {
-        const seen = warnedHeadroom.get(compaction) ?? new Set()
-        if (!seen.has(contextWindow)) {
-          seen.add(contextWindow)
-          warnedHeadroom.set(compaction, seen)
-          const target = agent.session.requestHeader?.()?.config
-          const policy = corePolicy(compaction.config, target)
-          const capped = policy && headroomCappedTrigger(contextWindow, policy)
-          if (capped) {
-            const msg = `smart-compaction: compaction-basic will auto-compact at <=${capped.triggerPercent}% `
-              + `(~${capped.triggerTokens} tokens) of this model's ${contextWindow}-token window, not `
-              + `${policy.thresholdRatio * 100}%: its headroomTokens (${policy.headroomTokens}) is sized for `
-              + `large hosted windows. Set headroomTokens: ${capped.suggestedHeadroom} on the preset's `
-              + 'compaction-basic row (see README "Compacts too early?").'
-            ;(ctx.logger?.warn ?? console.warn).call(ctx.logger ?? console, msg)
-          }
-        }
-      }
-    } catch {
-      // Diagnosis only: never let it break a turn.
-    }
-    return next()
-  })
+  ctx.tools.register(defineTool({
+    name: 'recall_output',
+    description: RECALL_DESCRIPTION,
+    parameters: {
+      id: {
+        type: 'string',
+        required: true,
+        description: 'The number from the hidden-output marker, e.g. "1234".',
+      },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          found: { type: 'boolean', required: true },
+          text: { type: 'string', required: true },
+          seq: { type: 'integer' },
+          truncated: { type: 'boolean' },
+        },
+      },
+      render: (_args, value) => [{ type: 'text', text: value.text }],
+    },
+    async execute(args, exec) {
+      if (!exec.agent) throw new Error('recall_output requires an owning agent session')
+      return recallToolOutput(exec.agent.session, args.id)
+    },
+  }))
 
-  // --- automatic safe-point compaction (see safe-point.js) ---------------
-  // Local models rarely call compact_now on their own, so the plugin also
-  // compacts by itself: a todo item flipping to completed marks a safe
-  // boundary, and the next step starts on compacted history if usage is past
-  // `safePointRatio`. Core's own 80% trigger stays as the backstop.
-  const ratio = config.safePointRatio ?? DEFAULT_SAFE_POINT_RATIO
-  if (ratio === false) return
-  if (typeof ratio !== 'number' || !(ratio > 0 && ratio < 1)) {
-    throw new Error(`smart-compaction: safePointRatio must be a number between 0 and 1, or false (got ${ratio})`)
+  const safeRatio = config.safePointRatio ?? DEFAULT_SAFE_POINT_RATIO
+  if (safeRatio !== false && (typeof safeRatio !== 'number' || !(safeRatio > 0 && safeRatio < 1))) {
+    throw new Error(`smart-compaction: safePointRatio must be a number between 0 and 1, or false (got ${safeRatio})`)
   }
+  const summaryMaxTokens = config.summaryMaxTokens ?? DEFAULT_SUMMARY_MAX_TOKENS
+  if (summaryMaxTokens !== false && !(Number.isInteger(summaryMaxTokens) && summaryMaxTokens > 0)) {
+    throw new Error(`smart-compaction: summaryMaxTokens must be a positive integer, or false (got ${summaryMaxTokens})`)
+  }
+  const mask = config.mask === false ? false : { ...MASK_DEFAULTS, ...(config.mask ?? {}) }
+  const warn = msg => (ctx.logger?.warn ?? console.warn).call(ctx.logger ?? console, msg)
+  const info = msg => (ctx.logger?.info ?? console.log).call(ctx.logger ?? console, msg)
+
+  // --- 1. engine tune (see engine-tune.js) --------------------------------
+  // compaction-basic's 65,536-token headroom pulls its trigger down to ~33-45%
+  // on 128k-class local models. Shrink it (and the summary cap) on the live
+  // preset engine before its own pre-step check runs.
+  function tuneEngine(compaction) {
+    if (summaryMaxTokens === false || !compaction) return
+    const next = tunedConfig(compaction.config, summaryMaxTokens)
+    if (next === undefined) return
+    compaction.config = next
+    info(`smart-compaction: compaction headroom and summary cap set to ${summaryMaxTokens} tokens`)
+  }
+
+  // --- 2. diagnosis (see headroom.js): only fires when the tune is off ----
+  const warnedHeadroom = new WeakMap()
+  function diagnose(compaction, agent, contextWindow) {
+    const seen = warnedHeadroom.get(compaction) ?? new Set()
+    if (seen.has(contextWindow)) return
+    seen.add(contextWindow)
+    warnedHeadroom.set(compaction, seen)
+    const policy = corePolicy(compaction.config, agent.session.requestHeader?.()?.config)
+    const capped = policy && headroomCappedTrigger(contextWindow, policy)
+    if (!capped) return
+    warn(`smart-compaction: compaction-basic will auto-compact at <=${capped.triggerPercent}% `
+      + `(~${capped.triggerTokens} tokens) of this model's ${contextWindow}-token window, not `
+      + `${policy.thresholdRatio * 100}%: its headroomTokens (${policy.headroomTokens}) is sized for `
+      + `large hosted windows. Set headroomTokens: ${capped.suggestedHeadroom} on the preset's `
+      + 'compaction-basic row, or leave smart-compaction\'s summaryMaxTokens on.')
+  }
+
+  // --- 3. batched masking of stale tool output (see mask.js) -------------
+  /**
+   * Mask stale tool output. With `force`, mask whatever is stale; otherwise
+   * only once it adds up to `batchRatio` of the window, so the prompt cache
+   * is invalidated rarely.
+   */
+  function maskStale(agent, contextWindow, force) {
+    if (mask === false) return { masked: 0, tokensSaved: 0 }
+    const meter = ctx.get('tokenMeter')
+    if (typeof meter?.estimateMessage !== 'function') return { masked: 0, tokensSaved: 0 }
+    const session = agent.session
+    const candidates = staleToolResults(session, mask)
+    if (candidates.length === 0) return { masked: 0, tokensSaved: 0 }
+    if (!force) {
+      const staleTokens = candidates.reduce((sum, c) => sum + meter.estimateMessage(c.message), 0)
+      const batch = contextWindow ? contextWindow * mask.batchRatio : 8192
+      if (staleTokens < batch) return { masked: 0, tokensSaved: 0 }
+    }
+    const result = maskResults(session, candidates, {
+      previewChars: mask.previewChars,
+      estimate: m => meter.estimateMessage(m),
+      freeze: freezeMessage,
+    })
+    if (result.masked > 0) {
+      info(`smart-compaction: hid ${result.masked} old tool outputs (~${result.tokensSaved} tokens); recall_output brings them back`)
+    }
+    return result
+  }
+
+  // --- 4. safe-point compaction (see safe-point.js) ----------------------
+  // A todo item flipping to completed marks a clean boundary. Past
+  // `safePointRatio`, mask stale output first; summarize only if that was
+  // not enough. Core's own trigger stays the backstop.
   const lastCompleted = new WeakMap()
   const atSafePoint = new WeakSet()
 
@@ -227,24 +317,47 @@ export function apply(ctx, config = {}) {
     return next()
   })
 
+  // `prepend`: everything here must land before compaction-basic's own
+  // pre-step pressure check, so that check sees the tuned config and the
+  // masked history (same ordering trick as dsh-compaction-policy).
   ctx.on('agent/pre-step', async ({ agent, signal }, next) => {
-    if (!atSafePoint.has(agent) || signal.aborted) return next()
-    atSafePoint.delete(agent)
-    const compaction = compactionFor(ctx, agent)
-    if (!compaction) return next()
-    const usage = usageOf(ctx, agent.session)
-    if (!overSafePointRatio(usage, ratio)) return next()
+    if (!agent || signal?.aborted) return next()
+    let compaction
+    let contextWindow
     try {
-      await compactAgent(compaction, agent, signal,
+      compaction = compactionFor(ctx, agent)
+      tuneEngine(compaction)
+      contextWindow = ctx.get('sessionProjections')?.stateOf(agent.session, 'contextPressure')?.contextWindow
+      if (compaction && contextWindow) diagnose(compaction, agent, contextWindow)
+      maskStale(agent, contextWindow, false)
+    } catch (error) {
+      warn(`smart-compaction: pre-step housekeeping failed: ${error instanceof Error ? error.message : String(error)}`)
+    }
+
+    if (safeRatio === false || !atSafePoint.has(agent)) return next()
+    atSafePoint.delete(agent)
+    if (!compaction) return next()
+    try {
+      if (!overSafePointRatio(usageOf(ctx, agent.session), safeRatio)) return next()
+      maskStale(agent, contextWindow, true)
+      const usage = usageOf(ctx, agent.session)
+      if (!overSafePointRatio(usage, safeRatio)) return next()
+      await compactAgent(ctx, compaction, agent, signal,
         `⏳ Step finished with ${usage.percentUsed}% of the context used — compacting now, `
         + 'before the next step. This runs one extra model call and can take a while on a local model.')
     } catch (error) {
       // Never break the turn: core's own pressure trigger is still the backstop.
-      console.warn(`smart-compaction: safe-point compaction failed: ${error instanceof Error ? error.message : String(error)}`)
+      warn(`smart-compaction: safe-point compaction failed: ${error instanceof Error ? error.message : String(error)}`)
     }
     return next()
-  })
+  }, { prepend: true })
 }
+
+const RECALL_DESCRIPTION =
+  'Get back the full original text of an older tool output that was hidden to save context. '
+  + 'Hidden outputs show a short preview and a marker with an id; pass that id. Only call this '
+  + 'when you actually need the hidden detail again — re-running a cheap command or re-reading '
+  + 'a small file region is often better than restoring a huge output.'
 
 const CONTEXT_STATUS_DESCRIPTION =
   'Check real, current context-window usage for this session: tokens used so far and the '

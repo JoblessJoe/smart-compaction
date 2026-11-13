@@ -46,7 +46,8 @@
     "capabilities": {
       "provides": [
         "tool:compact_now",
-        "tool:context_status"
+        "tool:context_status",
+        "tool:recall_output"
       ]
     },
     "compatibility": {
@@ -61,6 +62,9 @@
     "context-status.js",
     "safe-point.js",
     "headroom.js",
+    "engine-tune.js",
+    "mask.js",
+    "recall.js",
     "cordis.patch.yml",
     "icon.svg"
   ],
