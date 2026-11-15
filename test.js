@@ -154,21 +154,24 @@ async function main() {
   {
     // head + 6 nodes of 10 tokens each; keep >= 25 -> last 3 retained
     const session = makeSession([{ type: 'system/message' }, ...Array(6).fill({ type: 'user/message' })])
-    const range = selectCompactableRange(session, alwaysBalanced, { tokensOf: () => 10, retainTokens: 25 })
+    const priced = session.surface.nodes.map((seq, i) => ({ seq, tokens: 10 }))
+    const range = selectCompactableRange(session, alwaysBalanced, { nodes: priced, retainTokens: 25 })
     assert.deepEqual(range, { start: 1, end: 3 })
   }
 
-  console.log('14) budget: span capped so the summary call fits the window...')
-  {
-    const session = makeSession([{ type: 'system/message' }, ...Array(6).fill({ type: 'user/message' })])
-    const range = selectCompactableRange(session, alwaysBalanced, { tokensOf: () => 10, maxSpanTokens: 20 })
-    assert.deepEqual(range, { start: 1, end: 2 })
-  }
-
-  console.log('15) budget: nothing fits -> null...')
+  console.log('14) budget: whole history fits the tail budget -> null...')
   {
     const session = makeSession([{ type: 'system/message' }, ...Array(3).fill({ type: 'user/message' })])
-    assert.equal(selectCompactableRange(session, alwaysBalanced, { tokensOf: () => 10, maxSpanTokens: 5 }), null)
+    const priced = session.surface.nodes.map((seq, i) => ({ seq, tokens: 10 }))
+    assert.equal(selectCompactableRange(session, alwaysBalanced, { nodes: priced, retainTokens: 100 }), null)
+  }
+
+  console.log('15) budget: stale pricing (seqs do not match the surface) -> final node only...')
+  {
+    const session = makeSession([{ type: 'system/message' }, ...Array(6).fill({ type: 'user/message' })])
+    const stale = [{ seq: 99, tokens: 10 }, { seq: 98, tokens: 10 }]
+    const range = selectCompactableRange(session, alwaysBalanced, { nodes: stale, retainTokens: 25 })
+    assert.deepEqual(range, { start: 1, end: 5 })
   }
 
   console.log('16) trim: superseded write/read/bash stubbed; edits, latest and errors kept...')

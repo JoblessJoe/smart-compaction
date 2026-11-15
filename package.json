@@ -1,6 +1,6 @@
 {
   "name": "smart-compaction",
-  "version": "0.3.17",
+  "version": "0.3.16",
   "description": "dsh plugin: a compact_now tool letting the model trigger compaction itself at a safe point, plus a context_status tool so it can check real token usage against its context window, instead of only the automatic token-threshold trigger.",
   "icon": "./icon.svg",
   "homepage": "https://joblessjoe.com/smart-compaction",
@@ -46,7 +46,8 @@
     "capabilities": {
       "provides": [
         "tool:compact_now",
-        "tool:context_status"
+        "tool:context_status",
+        "tool:recall_output"
       ]
     },
     "compatibility": {
@@ -57,10 +58,16 @@
   },
   "files": [
     "index.js",
+    "compact.js",
     "select-range.js",
     "context-status.js",
     "safe-point.js",
-    "trim.js",
+    "headroom.js",
+    "engine-tune.js",
+    "mask.js",
+    "recall.js",
+    "reads.js",
+    "prompt-trim.js",
     "cordis.patch.yml",
     "icon.svg"
   ],
