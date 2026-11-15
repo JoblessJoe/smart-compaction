@@ -14,6 +14,7 @@ import { isMasked, MASK_TAG, maskResults, staleToolResults } from './mask.js'
 import { capReadText, readRange, supersededReads } from './reads.js'
 import { trimAssembly } from './prompt-trim.js'
 import { originalToolResult, recallToolOutput } from './recall.js'
+import { compactRange } from './compact.js'
 
 /**
  * A tiny append-only session double: events by seq, a surface of seqs, and
@@ -333,6 +334,26 @@ async function main() {
     assert.ok(out.contexts[0].text.includes('900 more characters not shown'))
     assert.equal(assembly.sections.length, 3, 'input untouched')
     assert.deepEqual(trimAssembly(assembly, {}).sections, assembly.sections, 'default: nothing cut')
+  }
+
+  // compactRange: never writes to the session before compacting (PR #1).
+  // A message appended mid-tool-call breaks tool_calls -> tool pairing.
+  {
+    const appended = []
+    const agent = { session: { append: (...args) => { appended.push(args); return {} } } }
+    const calls = []
+    const compaction = {
+      compactRegion: async (start, end, a, signal) => {
+        calls.push({ start, end, a, signal })
+        return { shadowedSeqs: [3, 4, 5], shadowedTokenCount: 1200 }
+      },
+    }
+    const signal = new AbortController().signal
+    const out = await compactRange(compaction, agent, { start: 3, end: 6 }, signal)
+    assert.deepEqual(appended, [], 'nothing appended to the session')
+    assert.deepEqual(calls, [{ start: 3, end: 6, a: agent, signal }])
+    assert.deepEqual(out, { compacted: true, shadowedCount: 3, shadowedTokenCount: 1200 })
+    console.log('ok compactRange appends nothing mid-tool-call')
   }
 
   console.log('\nall passed.')

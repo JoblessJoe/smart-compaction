@@ -49,17 +49,17 @@ Two tools, both no-argument.
   tool-call-pairing-safe boundary logic dsh's own compaction already guarantees, reimplemented
   here against dsh's *public* APIs only (no dsh core changes, no dependency on
   `compaction-basic`'s internals).
-- Posts a one-line "Compacting now" notice to the chat *before* calling `compactRegion()`, not
-  after — the summarization call is one extra model request and can take a while (minutes, on a
-  local model), and without this the chat just looks stuck between the tool call and its result.
-  Tagged with its own source kind and `form: 'notice'` (the same tagging dsh-compaction-basic's own
-  checkpoint messages and other host-generated asides use), so it renders as a collapsed system aside, not as
-  if the user typed it, and needs no model output of its own.
+- Writes nothing to the chat history: it calls `compactRegion()` directly and reports through the
+  tool result (`Compacted N history items (~T tokens).`). An earlier version posted a "Compacting
+  now" notice first, but `compact_now` runs inside its own tool call, so the notice landed between
+  the assistant `tool_calls` message and its `tool` result. Strict providers then rejected every
+  later request with `Messages with role 'tool' must be a response to a preceding message with
+  'tool_calls'`. (Fix by @Kita-Ikuyo, PR #1.)
 - Calls dsh's own `ctx.compaction.compactRegion()` to actually do the compaction — the same
   summarizer, the same durable `compaction/start`/`compaction/end` log events, the same guarantees
   as any other compaction in the session.
 - No-ops harmlessly (`"Not enough compactable history yet."`) if there isn't enough history yet —
-  safe for the model to call speculatively. No notice is posted for a no-op call.
+  safe for the model to call speculatively.
 
 **`context_status`**
 
@@ -81,8 +81,8 @@ Two tools, both no-argument.
 - Watches `todo_write`. When an item flips to `completed`, that's a finished step: a safe place
   to cut.
 - If usage is past `safePointRatio` (default **0.6**) at that moment, it first hides stale tool
-  output. Only if that is not enough does the next step start on compacted history. Same notice,
-  same `compactRegion()` path as `compact_now`.
+  output. Only if that is not enough does the next step start on compacted history. Same
+  `compactRegion()` path as `compact_now`.
 - Compaction keeps the newest ~16% of the window verbatim (the engine's own `retainRatio`), so
   the model doesn't have to re-read what it was just working on.
 - dsh's own 80% trigger stays as the backstop; this just gets there first, at a clean boundary.

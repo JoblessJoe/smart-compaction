@@ -58,6 +58,7 @@
   },
   "files": [
     "index.js",
+    "compact.js",
     "select-range.js",
     "context-status.js",
     "safe-point.js",
