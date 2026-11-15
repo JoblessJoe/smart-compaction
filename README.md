@@ -14,8 +14,12 @@ A [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (dsh) plug
 
 - **`compact_now`:** compacts at a point the model knows is safe, e.g. right after finishing a todo. Works mid-turn.
 - **`context_status`:** real token usage against the session's actual context window, so the model stops guessing.
-- **Automatic safe-point compaction:** local models rarely call a tool like this on their own, so the plugin also compacts by itself the moment a todo item is marked done and the context is over half full. No model decision needed.
-- **No config, no core changes:** built only on dsh's public compaction APIs.
+- **Automatic safe-point compaction:** local models rarely call a tool like this on their own, so the plugin also compacts by itself the moment a todo item is marked done and the context is over 60% full. No model decision needed.
+- **Hides old tool output, keeps it recallable:** big tool results more than 4 steps old shrink to a short preview, in batches. `recall_output` brings any of them back word for word. No model call.
+- **Hides outdated file reads:** once a file is read again or rewritten, older copies are hidden, so the model doesn't work from code that is no longer there.
+- **Smaller reply reserve and file reads:** caps the reply reserve at 16k tokens (dsh's DeepSeek adapter defaults to 256k) and one `read` at 20,000 characters, with an `offset` hint to read on.
+- **Fixes the early trigger:** dsh's own compaction fires at ~33-45% on 128k local models. The plugin shrinks its reserve so it fires near 80% again.
+- **No core changes:** built only on dsh's public compaction APIs.
 
 ```bash
 npx @deepseek-ai/dsh plugin --profile web add smart-compaction
@@ -45,17 +49,17 @@ Two tools, both no-argument.
   tool-call-pairing-safe boundary logic dsh's own compaction already guarantees, reimplemented
   here against dsh's *public* APIs only (no dsh core changes, no dependency on
   `compaction-basic`'s internals).
-- Posts a one-line "Compacting now" notice to the chat *before* calling `compactRegion()`, not
-  after — the summarization call is one extra model request and can take a while (minutes, on a
-  local model), and without this the chat just looks stuck between the tool call and its result.
-  Tagged with its own source kind and `form: 'notice'` (the same tagging dsh-compaction-basic's own
-  checkpoint messages and other host-generated asides use), so it renders as a collapsed system aside, not as
-  if the user typed it, and needs no model output of its own.
+- Writes nothing to the chat history: it calls `compactRegion()` directly and reports through the
+  tool result (`Compacted N history items (~T tokens).`). An earlier version posted a "Compacting
+  now" notice first, but `compact_now` runs inside its own tool call, so the notice landed between
+  the assistant `tool_calls` message and its `tool` result. Strict providers then rejected every
+  later request with `Messages with role 'tool' must be a response to a preceding message with
+  'tool_calls'`. (Fix by @Kita-Ikuyo, PR #1.)
 - Calls dsh's own `ctx.compaction.compactRegion()` to actually do the compaction — the same
   summarizer, the same durable `compaction/start`/`compaction/end` log events, the same guarantees
   as any other compaction in the session.
 - No-ops harmlessly (`"Not enough compactable history yet."`) if there isn't enough history yet —
-  safe for the model to call speculatively. No notice is posted for a no-op call.
+  safe for the model to call speculatively.
 
 **`context_status`**
 
@@ -74,38 +78,76 @@ Two tools, both no-argument.
 
 **Automatic safe-point compaction**
 
-- Safe points: a `todo_write` item flips to `completed`, or a new turn starts (you just sent a
-  message). Nothing is half-done there.
-- Past `safePointRatio` (default **0.7**) at a safe point, the next step starts on compacted
-  history. Late on purpose: small context windows stay fully used.
-- Models often run 20+ steps with no safe point. So past `hardRatio` (default **0.85**) *any*
-  step boundary compacts. Still between steps — never mid-generation. Keep it below
-  compaction-basic's `thresholdRatio` so this one runs first.
-- Every compaction keeps ~15% of the window as a verbatim recent tail, and caps the summarized
-  span so the summary call itself fits the window. (Compacting everything at 90%+ used to
-  overflow the window → "summarization truncated at the token cap".)
-- dsh's own threshold trigger stays as the backstop.
-
-**Stale-content trimming (no model call)**
-
-- From `trimRatio` (default **0.5**) at safe points, and always right before a compaction, stale
-  tool content becomes a one-line stub:
-  - a `write` (call + result), once that file is rewritten or read in full later;
-  - a `read` result, once that file is read in full again or rewritten;
-  - a `bash` result, once the exact same command ran again.
-- Kept verbatim: every `edit` (the diffs), the latest version of each file, errors, capped/partial reads.
-- Only runs when it frees ~2k+ tokens — each trim resets the provider's prompt cache.
-- Uses core's replace protocol, so trimmed sessions still resume with the plugin uninstalled.
+- Watches `todo_write`. When an item flips to `completed`, that's a finished step: a safe place
+  to cut.
+- If usage is past `safePointRatio` (default **0.6**) at that moment, it first hides stale tool
+  output. Only if that is not enough does the next step start on compacted history. Same
+  `compactRegion()` path as `compact_now`.
+- Compaction keeps the newest ~16% of the window verbatim (the engine's own `retainRatio`), so
+  the model doesn't have to re-read what it was just working on.
+- dsh's own 80% trigger stays as the backstop; this just gets there first, at a clean boundary.
 - A failure here never breaks the turn. It logs a warning and the backstop takes over.
 - Tune or turn it off in your profile's `cordis.patch.yml`:
 
   ```yaml
   - id: tool-compact-now
     config:
-      safePointRatio: 0.7   # or false to disable
-      hardRatio: 0.85       # or false to disable
-      trimRatio: 0.5        # or false to disable
+      safePointRatio: 0.6   # or false to disable
   ```
+
+**Hiding stale tool output** (idea from `@maskpoint/dsh`, and JetBrains'
+[observation-masking study](https://arxiv.org/abs/2508.21433): tool output is most of an agent's
+context, and hiding old output works about as well as a summary at half the cost)
+
+- A tool result is stale once 4 newer model steps exist and it has 2,000+ characters.
+- Stale results become their first 300 characters plus a marker with an id.
+- Runs in one batch once stale output adds up to 10% of the window, not every step. Each rewrite
+  of old history makes a local model re-read the prompt from there.
+- Uses dsh's own prune protocol (the one `tool-result-pruner` uses), so the token meter stays exact
+  and the original stays in the session log.
+
+**Outdated file reads**
+
+- A `read` result is outdated once a later read covers the same lines, or a later `write` replaced
+  the file. It becomes a one-line marker naming the file and lines; the newer copy stays.
+- Hidden in the same batch as stale output (same cache-friendly rule).
+
+**Reply reserve** (`maxOutputTokens`, default 16,384)
+
+- Every request keeps room free for the model's reply, and dsh's compaction trigger subtracts that
+  same room. dsh's DeepSeek adapter reserves 256,000 by default. The plugin caps it per request and
+  never raises a lower value you already set.
+
+**Read cap** (`readMaxChars`, default 20,000)
+
+- dsh's `read` returns up to 51,200 bytes (~13k tokens). The plugin cuts longer results at a line
+  boundary and ends them with `Use offset=N to continue.`, so nothing is lost: the file is on disk.
+
+**System prompt** (`prompt`, nothing cut by default)
+
+- Logs each prompt section's and context's size once, so you can see what costs room.
+- `dropSections`, `sections` (replacement text), `maxSectionChars` and `maxContextChars` (e.g.
+  AGENTS.md) trim them. A cut always says what was cut.
+- Tool *schemas* belong to dsh and can't be edited by a plugin. Remove whole tools in the web
+  preset editor instead.
+
+**Not handled: file contents inside old `write`/`edit` calls.** Hiding those means rewriting the
+model's own messages, which dsh guards closely. Not done without testing on a real dsh.
+
+**`recall_output`** (idea from `dsh-compaction-vcc`'s `recall`)
+
+- Takes the id from a marker and returns the full original text, capped at 60,000 characters.
+
+**Early-trigger fix** (idea from `dsh-compaction-policy` / `dsh-compaction-threshold`)
+
+dsh's `compaction-basic` triggers at `floor(min(W × 0.8, W − O − headroomTokens))`, with
+`headroomTokens` = 65,536. On a 128k local model the second term wins, so it fires at ~33-45% and
+then again every few steps. Its summary cap (`maxTokens`) is the same 65,536.
+
+The plugin lowers both to `summaryMaxTokens` (default 16,384) on the live engine before each step,
+so the trigger is back near 80% and the summary call still fits in the window. Values you set lower
+yourself are kept. If you turn this off, the plugin logs a one-time warning with a suggested value
+instead.
 
 ## How it works
 
@@ -215,7 +257,26 @@ context-usage summary logic (`context-status.js`) — no live dsh/Ollama session
 
 ## Configuration
 
-None. The tool takes no arguments and needs no setup beyond installing it.
+All optional, in your profile's `cordis.patch.yml`:
+
+```yaml
+- id: tool-compact-now
+  config:
+    safePointRatio: 0.6        # compact after a finished todo past this; false = off
+    summaryMaxTokens: 16384    # engine headroom + summary cap; false = leave the engine alone
+    mask:                      # false = never hide tool output
+      afterSteps: 4            # stale after this many newer steps
+      minChars: 2000           # smaller results are left alone
+      previewChars: 300        # preview kept in the mask
+      batchRatio: 0.1          # hide in one batch once stale output is this share of the window
+      dedupeReads: true        # also hide outdated file reads
+    maxOutputTokens: 16384     # reply reserve per request; false = leave as is
+    readMaxChars: 20000        # cap one read result; false = dsh's own 51,200 bytes
+    prompt:                    # nothing is cut unless set
+      report: true             # log section/context sizes once
+      dropSections: []         # section names to remove
+      maxContextChars: 8000    # e.g. cap AGENTS.md
+```
 
 ## Status
 
