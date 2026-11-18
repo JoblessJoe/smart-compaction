@@ -341,6 +341,17 @@ export function apply(ctx, config = {}) {
     })
   }
 
+  // --- 5b. tool-schema recency (see tool-recency.js) -----------------------
+  // Every request re-sends every tool's JSON schema. Track which tools each
+  // agent has used recently so `system-prompt/assemble` can hide the ones that
+  // fell out of the window (never-used tools are always kept).
+  if (schemaSlim) {
+    ctx.on('tools/post-execute', (exec, _result, next) => {
+      if (exec.agent && exec.name) recordToolUse(toolRecency, exec.agent, exec.name, schemaSlim.window)
+      return next()
+    })
+  }
+
   // --- 6. system prompt (see prompt-trim.js) -----------------------------
   // Nothing is cut unless configured; the size report (once per distinct
   // layout) shows which section names are worth trimming.
@@ -362,20 +373,44 @@ export function apply(ctx, config = {}) {
   })
 
   // --- 7. safe-point compaction (see safe-point.js) ----------------------
-  // A todo item flipping to completed marks a clean boundary. Past
-  // `safePointRatio`, mask stale output first; summarize only if that was
-  // not enough. Core's own trigger stays the backstop.
+  // A safe point is any clean boundary where the model is between units of
+  // work: a todo item just flipped to completed (mid-turn), or an agent just
+  // went idle (end of a turn — the default, so todo-less research sessions
+  // still get a boundary). Past `safePointRatio` at a safe point, mask stale
+  // output first; summarize only if that was not enough. History is rewritten
+  // ONLY at these moments, so the KV prefix cache is invalidated at most once
+  // per compaction — never mid-turn by per-step masking. Core's own trigger
+  // stays the backstop.
   const lastCompleted = new WeakMap()
   const atSafePoint = new WeakSet()
 
-  ctx.on('tools/post-execute', async (exec, _result, next) => {
-    if (exec.agent && exec.name === 'todo_write') {
-      const done = completedCount(exec.arguments)
-      if (finishedStep(lastCompleted.get(exec.agent), done)) atSafePoint.add(exec.agent)
-      lastCompleted.set(exec.agent, done)
-    }
-    return next()
-  })
+  // A todo item flipping to completed marks a mid-turn safe boundary.
+  if (config.safePointBoundaries?.todo !== false) {
+    ctx.on('tools/post-execute', async (exec, _result, next) => {
+      if (exec.agent && exec.name === 'todo_write') {
+        const done = completedCount(exec.arguments)
+        if (finishedStep(lastCompleted.get(exec.agent), done)) atSafePoint.add(exec.agent)
+        lastCompleted.set(exec.agent, done)
+      }
+      return next()
+    })
+  }
+
+  // An agent going idle is the universal safe boundary: it fires at the end of
+  // every turn (the model just produced a full answer and is waiting), and it
+  // carries the agent identity for free (the agent-loop fuses `agent` into
+  // every agent-scoped event). This is the default boundary — it is what fires
+  // for research/analysis sessions that never use todos (the gap that let a
+  // session run to a 99.7% emergency compaction). The flag is consumed at the
+  // agent's next pre-step, so compaction lands at the start of the following
+  // turn, over history that is now fully stale. `agent/status` fires on every
+  // transition; only the ->idle edge is a boundary.
+  if (config.safePointBoundaries?.idle !== false) {
+    ctx.on('agent/status', async ({ status, agent }, next) => {
+      if (agent && status === 'idle') atSafePoint.add(agent)
+      return next()
+    })
+  }
 
   // `prepend`: everything here must land before compaction-basic's own
   // pre-step pressure check, so that check sees the tuned config and the
@@ -389,7 +424,6 @@ export function apply(ctx, config = {}) {
       tuneEngine(compaction)
       contextWindow = ctx.get('sessionProjections')?.stateOf(agent.session, 'contextPressure')?.contextWindow
       if (compaction && contextWindow) diagnose(compaction, agent, contextWindow)
-      maskStale(agent, contextWindow, false)
     } catch (error) {
       warn(`smart-compaction: pre-step housekeeping failed: ${error instanceof Error ? error.message : String(error)}`)
     }
@@ -399,6 +433,8 @@ export function apply(ctx, config = {}) {
     if (!compaction) return next()
     try {
       if (!overSafePointRatio(usageOf(ctx, agent.session), safeRatio)) return next()
+      // Mask only here, at the compaction moment: the summary rewrites the
+      // whole range anyway, so the marginal cache cost of masking is ~0.
       maskStale(agent, contextWindow, true)
       const usage = usageOf(ctx, agent.session)
       if (!overSafePointRatio(usage, safeRatio)) return next()
