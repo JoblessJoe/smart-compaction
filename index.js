@@ -341,17 +341,6 @@ export function apply(ctx, config = {}) {
     })
   }
 
-  // --- 5b. tool-schema recency (see tool-recency.js) -----------------------
-  // Every request re-sends every tool's JSON schema. Track which tools each
-  // agent has used recently so `system-prompt/assemble` can hide the ones that
-  // fell out of the window (never-used tools are always kept).
-  if (schemaSlim) {
-    ctx.on('tools/post-execute', (exec, _result, next) => {
-      if (exec.agent && exec.name) recordToolUse(toolRecency, exec.agent, exec.name, schemaSlim.window)
-      return next()
-    })
-  }
-
   // --- 6. system prompt (see prompt-trim.js) -----------------------------
   // Nothing is cut unless configured; the size report (once per distinct
   // layout) shows which section names are worth trimming.
