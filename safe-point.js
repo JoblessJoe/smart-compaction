@@ -3,15 +3,15 @@
  * rarely call compact_now on their own". Instead of waiting for the model to
  * decide, the plugin treats "a todo item just flipped to completed" as the
  * safe boundary and compacts before the next step whenever usage is already
- * past `ratio` of the context window — well below core's own 80% trigger,
- * which fires wherever the step happens to land.
+ * past `ratio` of the context window — below core's own 90% backstop
+ * (thresholdRatio), which fires wherever the step happens to land.
  *
  * Pure helpers only; index.js wires them to `tools/post-execute` and
  * `agent/pre-step`.
  */
 
 /** Default usage fraction at which a finished todo item triggers compaction. */
-export const DEFAULT_SAFE_POINT_RATIO = 0.6
+export const DEFAULT_SAFE_POINT_RATIO = 0.8
 
 /**
  * Number of completed items in a `todo_write` argument list (0 on bad input).

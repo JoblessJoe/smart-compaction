@@ -112,7 +112,7 @@ function usageOf(ctx, session) {
  *   prompt?: object,
  * }} [config]
  *   - `safePointRatio`: usage fraction (0-1) at which finishing a todo item
- *     compacts automatically; `false` turns it off. Default 0.6.
+ *     compacts automatically; `false` turns it off. Default 0.8.
  *   - `summaryMaxTokens`: headroom and summary cap forced onto the live
  *     compaction-basic engine; `false` leaves the engine alone. Default 16384.
  *   - `mask`: batched masking of stale tool output and outdated file reads;

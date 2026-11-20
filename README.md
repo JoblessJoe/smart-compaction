@@ -80,19 +80,19 @@ Two tools, both no-argument.
 
 - Watches `todo_write`. When an item flips to `completed`, that's a finished step: a safe place
   to cut.
-- If usage is past `safePointRatio` (default **0.6**) at that moment, it first hides stale tool
+- If usage is past `safePointRatio` (default **0.8**) at that moment, it first hides stale tool
   output. Only if that is not enough does the next step start on compacted history. Same
   `compactRegion()` path as `compact_now`.
 - Compaction keeps the newest ~16% of the window verbatim (the engine's own `retainRatio`), so
   the model doesn't have to re-read what it was just working on.
-- dsh's own 80% trigger stays as the backstop; this just gets there first, at a clean boundary.
+- dsh's own 90% backstop (compaction-basic `thresholdRatio`) stays as the last resort; this just gets there first, at a clean boundary.
 - A failure here never breaks the turn. It logs a warning and the backstop takes over.
 - Tune or turn it off in your profile's `cordis.patch.yml`:
 
   ```yaml
   - id: tool-compact-now
     config:
-      safePointRatio: 0.6   # or false to disable
+      safePointRatio: 0.8   # or false to disable
   ```
 
 **Hiding stale tool output** (idea from `@maskpoint/dsh`, and JetBrains'
@@ -262,7 +262,7 @@ All optional, in your profile's `cordis.patch.yml`:
 ```yaml
 - id: tool-compact-now
   config:
-    safePointRatio: 0.6        # compact after a finished todo past this; false = off
+    safePointRatio: 0.8        # compact after a finished todo past this; false = off
     summaryMaxTokens: 16384    # engine headroom + summary cap; false = leave the engine alone
     mask:                      # false = never hide tool output
       afterSteps: 4            # stale after this many newer steps
