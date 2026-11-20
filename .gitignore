@@ -6,3 +6,11 @@ CLAUDE.md
 AGENTS.md
 agents-snippet.md
 HANDOFF.md
+.research/
+fetch_*
+md_*.md
+cc_cache_gist.md
+leavingClaude.jsonl
+session-*.jsonl
+session-*.jsonl.zstd
+session-log.jsonl
